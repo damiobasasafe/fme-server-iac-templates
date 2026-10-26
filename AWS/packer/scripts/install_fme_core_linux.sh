@@ -8,7 +8,7 @@ echo "==> Updating system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y curl wget unzip zip nfs-common
+apt-get install -y curl wget unzip zip nfs-common expect
 
 # Install AWS CLI v2
 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
@@ -22,7 +22,13 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Core (unattended)"
-printf "Yes\nYes\n" | "$INSTALLER_FILE" --nox11
+expect -c "
+  set timeout 600
+  spawn $INSTALLER_FILE --nox11
+  expect \"Yes/No\" { send \"Yes\r\" }
+  expect \"Yes/No\" { send \"Yes\r\" }
+  expect eof
+"
 
 echo "==> Creating config directory"
 mkdir -p /opt/fmeflow
