@@ -22,10 +22,7 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Engine (unattended)"
-"$INSTALLER_FILE" \
-  --mode unattended \
-  --fmeflow_role engine \
-  --acceptLicense yes
+"$INSTALLER_FILE" --accept --quiet --nox11
 
 echo "==> Creating config directory"
 mkdir -p /opt/fmeflow
