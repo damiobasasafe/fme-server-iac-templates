@@ -35,12 +35,15 @@ locals {
 
 # ── Core AMI ──────────────────────────────────────────────────────────────────
 source "amazon-ebs" "fme_core_linux" {
-  ami_name      = "dami-fme-core-linux-${local.timestamp}"
-  communicator  = "ssh"
-  instance_type = "m5.large"
-  region        = var.region
-  source_ami    = var.source_ami
-  ssh_username  = "ubuntu"
+  ami_name               = "dami-fme-core-linux-${local.timestamp}"
+  communicator           = "ssh"
+  instance_type          = "m5.large"
+  region                 = var.region
+  source_ami             = var.source_ami
+  ssh_username           = "ubuntu"
+  vpc_id                 = "vpc-05185b550bd6a5f29"
+  subnet_id              = "subnet-0d9fa5cdf9cb83f73"
+  associate_public_ip_address = true
 
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
@@ -62,12 +65,15 @@ source "amazon-ebs" "fme_core_linux" {
 
 # ── Engine AMI ────────────────────────────────────────────────────────────────
 source "amazon-ebs" "fme_engine_linux" {
-  ami_name      = "dami-fme-engine-linux-${local.timestamp}"
-  communicator  = "ssh"
-  instance_type = "m5.large"
-  region        = var.region
-  source_ami    = var.source_ami
-  ssh_username  = "ubuntu"
+  ami_name               = "dami-fme-engine-linux-${local.timestamp}"
+  communicator           = "ssh"
+  instance_type          = "m5.large"
+  region                 = var.region
+  source_ami             = var.source_ami
+  ssh_username           = "ubuntu"
+  vpc_id                 = "vpc-05185b550bd6a5f29"
+  subnet_id              = "subnet-0d9fa5cdf9cb83f73"
+  associate_public_ip_address = true
 
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
