@@ -1,0 +1,189 @@
+// Dami - FME Flow Main CI/CD Orchestration Pipeline
+// Orchestrates: Packer AMI build → Terraform infra provisioning
+// Triggered by GitHub push or manually via Jenkins UI
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Target environment to deploy to'
+        )
+        booleanParam(
+            name: 'BUILD_AMIS',
+            defaultValue: true,
+            description: 'Run Packer to build fresh AMIs. Uncheck to reuse existing AMI IDs below.'
+        )
+        string(
+            name: 'EXISTING_CORE_AMI',
+            defaultValue: '',
+            description: 'Existing Core AMI ID to use (only if BUILD_AMIS is unchecked)'
+        )
+        string(
+            name: 'EXISTING_ENGINE_AMI',
+            defaultValue: '',
+            description: 'Existing Engine AMI ID to use (only if BUILD_AMIS is unchecked)'
+        )
+        string(
+            name: 'FME_INSTALLER_URL',
+            defaultValue: '',
+            description: 'URL to FME Flow installer. Required when BUILD_AMIS is checked.'
+        )
+        string(
+            name: 'FME_VERSION',
+            defaultValue: '2026.3',
+            description: 'FME Flow version being deployed'
+        )
+        booleanParam(
+            name: 'AUTO_APPROVE',
+            defaultValue: false,
+            description: 'Auto-approve Terraform apply without manual gate (not recommended for prod)'
+        )
+    }
+
+    environment {
+        AWS_REGION        = 'us-east-1'
+        AWS_DEFAULT_REGION = 'us-east-1'
+        TF_IN_AUTOMATION  = 'true'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                sh 'git log --oneline -5'
+            }
+        }
+
+        stage('Pre-flight Checks') {
+            steps {
+                sh 'aws sts get-caller-identity'
+                sh 'terraform version'
+                sh 'packer version'
+                script {
+                    if (params.BUILD_AMIS && !params.FME_INSTALLER_URL) {
+                        error('FME_INSTALLER_URL is required when BUILD_AMIS is enabled')
+                    }
+                    if (!params.BUILD_AMIS && (!params.EXISTING_CORE_AMI || !params.EXISTING_ENGINE_AMI)) {
+                        error('EXISTING_CORE_AMI and EXISTING_ENGINE_AMI are required when BUILD_AMIS is disabled')
+                    }
+                }
+                echo "Deploying FME Flow ${params.FME_VERSION} to [${params.ENVIRONMENT}]"
+            }
+        }
+
+        stage('Build AMIs') {
+            when {
+                expression { params.BUILD_AMIS == true }
+            }
+            steps {
+                script {
+                    def packerJob = build(
+                        job: 'dami-fmeflow-packer',
+                        parameters: [
+                            string(name: 'FME_INSTALLER_URL', value: params.FME_INSTALLER_URL),
+                            string(name: 'AWS_REGION',         value: env.AWS_REGION),
+                            string(name: 'FME_VERSION',        value: params.FME_VERSION),
+                            string(name: 'SOURCE_AMI',         value: 'ami-0c1a9930d2846de36')
+                        ],
+                        wait: true,
+                        propagate: true
+                    )
+
+                    // Copy AMI ID artifact from Packer job
+                    copyArtifacts(
+                        projectName: 'dami-fmeflow-packer',
+                        selector: specific("${packerJob.number}"),
+                        filter: 'ami-ids.env'
+                    )
+
+                    def amiEnv = readFile('ami-ids.env').trim()
+                    amiEnv.split('\n').each { line ->
+                        def parts = line.split('=', 2)
+                        if (parts.size() == 2) env[parts[0]] = parts[1]
+                    }
+
+                    echo "Core AMI:   ${env.CORE_AMI_ID}"
+                    echo "Engine AMI: ${env.ENGINE_AMI_ID}"
+                }
+            }
+        }
+
+        stage('Use Existing AMIs') {
+            when {
+                expression { params.BUILD_AMIS == false }
+            }
+            steps {
+                script {
+                    env.CORE_AMI_ID   = params.EXISTING_CORE_AMI
+                    env.ENGINE_AMI_ID = params.EXISTING_ENGINE_AMI
+                    echo "Using existing Core AMI:   ${env.CORE_AMI_ID}"
+                    echo "Using existing Engine AMI: ${env.ENGINE_AMI_ID}"
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                build(
+                    job: 'dami-fmeflow-terraform',
+                    parameters: [
+                        choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
+                        choice(name: 'ACTION',        value: 'plan'),
+                        string(name: 'CORE_AMI_ID',   value: env.CORE_AMI_ID),
+                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID)
+                    ],
+                    wait: true,
+                    propagate: true
+                )
+            }
+        }
+
+        stage('Approval Gate') {
+            when {
+                expression { params.AUTO_APPROVE == false }
+            }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: "Deploy FME Flow ${params.FME_VERSION} to [${params.ENVIRONMENT}]?",
+                          ok: 'Deploy'
+                }
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                build(
+                    job: 'dami-fmeflow-terraform',
+                    parameters: [
+                        choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
+                        choice(name: 'ACTION',        value: 'apply'),
+                        string(name: 'CORE_AMI_ID',   value: env.CORE_AMI_ID),
+                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID)
+                    ],
+                    wait: true,
+                    propagate: true
+                )
+            }
+        }
+    }
+
+    post {
+        success {
+            echo """
+            ============================================================
+            Dami FME Flow CI/CD - Deployment Successful
+            Environment : ${params.ENVIRONMENT}
+            FME Version : ${params.FME_VERSION}
+            Core AMI    : ${env.CORE_AMI_ID ?: 'N/A'}
+            Engine AMI  : ${env.ENGINE_AMI_ID ?: 'N/A'}
+            ============================================================
+            """
+        }
+        failure {
+            echo "Deployment FAILED for [${params.ENVIRONMENT}]. Review logs above."
+        }
+    }
+}

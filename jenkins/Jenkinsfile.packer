@@ -1,0 +1,141 @@
+// Dami - FME Flow Packer AMI Build Pipeline
+// Builds FME Core and Engine AMIs using Packer and publishes AMI IDs as artifacts
+
+pipeline {
+    agent any
+
+    parameters {
+        string(
+            name: 'FME_INSTALLER_URL',
+            defaultValue: '',
+            description: 'URL to the FME Flow installer (.exe). Required.'
+        )
+        string(
+            name: 'SOURCE_AMI',
+            defaultValue: 'ami-0c1a9930d2846de36',
+            description: 'Base Windows Server 2022 AMI ID (us-east-1 default)'
+        )
+        string(
+            name: 'AWS_REGION',
+            defaultValue: 'us-east-1',
+            description: 'AWS region to build and publish AMIs in'
+        )
+        string(
+            name: 'FME_VERSION',
+            defaultValue: '2026.3',
+            description: 'FME Flow version being built (used for tagging)'
+        )
+    }
+
+    environment {
+        PACKER_DIR        = 'AWS/packer'
+        PACKER_LOG        = '1'
+        PACKER_LOG_PATH   = 'packer-build.log'
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                script {
+                    if (!params.FME_INSTALLER_URL) {
+                        error('FME_INSTALLER_URL is required')
+                    }
+                }
+                sh 'packer version'
+                sh 'aws sts get-caller-identity'
+            }
+        }
+
+        stage('Packer Init') {
+            steps {
+                dir(env.PACKER_DIR) {
+                    sh 'packer init fme_flow_aws.pkr.hcl'
+                }
+            }
+        }
+
+        stage('Build AMIs') {
+            parallel {
+                stage('Build Core AMI') {
+                    steps {
+                        dir(env.PACKER_DIR) {
+                            sh """
+                                packer build \
+                                    -only='fme-core-2025.amazon-ebs.fme_core' \
+                                    -var 'region=${params.AWS_REGION}' \
+                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \
+                                    -var 'source_ami=${params.SOURCE_AMI}' \
+                                    -var 'tags={\"Name\":\"dami-fme-core-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\"}' \
+                                    fme_flow_aws.pkr.hcl | tee packer-core.log
+                            """
+                            script {
+                                def log = readFile('packer-core.log')
+                                def amiMatch = log =~ /ami-[a-z0-9]{17}/
+                                if (amiMatch) {
+                                    env.CORE_AMI_ID = amiMatch[amiMatch.count - 1]
+                                    echo "Core AMI ID: ${env.CORE_AMI_ID}"
+                                } else {
+                                    error('Failed to extract Core AMI ID from Packer output')
+                                }
+                            }
+                        }
+                    }
+                }
+
+                stage('Build Engine AMI') {
+                    steps {
+                        dir(env.PACKER_DIR) {
+                            sh """
+                                packer build \
+                                    -only='fme-engine-2025.amazon-ebs.fme_engine' \
+                                    -var 'region=${params.AWS_REGION}' \
+                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \
+                                    -var 'source_ami=${params.SOURCE_AMI}' \
+                                    -var 'tags={\"Name\":\"dami-fme-engine-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\"}' \
+                                    fme_flow_aws.pkr.hcl | tee packer-engine.log
+                            """
+                            script {
+                                def log = readFile('packer-engine.log')
+                                def amiMatch = log =~ /ami-[a-z0-9]{17}/
+                                if (amiMatch) {
+                                    env.ENGINE_AMI_ID = amiMatch[amiMatch.count - 1]
+                                    echo "Engine AMI ID: ${env.ENGINE_AMI_ID}"
+                                } else {
+                                    error('Failed to extract Engine AMI ID from Packer output')
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Publish AMI IDs') {
+            steps {
+                script {
+                    echo "Core AMI:   ${env.CORE_AMI_ID}"
+                    echo "Engine AMI: ${env.ENGINE_AMI_ID}"
+
+                    // Write AMI IDs to file for downstream pipelines to consume
+                    writeFile file: 'ami-ids.env', text: """CORE_AMI_ID=${env.CORE_AMI_ID}
+ENGINE_AMI_ID=${env.ENGINE_AMI_ID}
+FME_VERSION=${params.FME_VERSION}
+AWS_REGION=${params.AWS_REGION}
+"""
+                }
+                archiveArtifacts artifacts: 'ami-ids.env', fingerprint: true
+                archiveArtifacts artifacts: 'AWS/packer/packer-*.log', allowEmptyArchive: true
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Packer build failed. Check packer-build.log for details.'
+            archiveArtifacts artifacts: 'AWS/packer/packer-*.log', allowEmptyArchive: true
+        }
+        success {
+            echo "AMI build complete. Core: ${env.CORE_AMI_ID} | Engine: ${env.ENGINE_AMI_ID}"
+        }
+    }
+}
