@@ -25,6 +25,16 @@ pipeline {
             defaultValue: '2026.3',
             description: 'FME Flow version being built (used for tagging)'
         )
+        string(
+            name: 'VPC_ID',
+            defaultValue: '',
+            description: 'VPC ID for Packer build instances (stored in Jenkins credentials)'
+        )
+        string(
+            name: 'SUBNET_ID',
+            defaultValue: '',
+            description: 'Public subnet ID for Packer build instances (stored in Jenkins credentials)'
+        )
     }
 
     environment {
@@ -66,6 +76,8 @@ pipeline {
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
                                     -var 'source_ami=${params.SOURCE_AMI}' \
+                                    -var 'vpc_id=${params.VPC_ID}' \
+                                    -var 'subnet_id=${params.SUBNET_ID}' \
                                     -var 'tags={\"Name\":\"dami-fme-core-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
                                     ${env.PACKER_TEMPLATE} | tee packer-core.log
                             """
@@ -92,6 +104,8 @@ pipeline {
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
                                     -var 'source_ami=${params.SOURCE_AMI}' \
+                                    -var 'vpc_id=${params.VPC_ID}' \
+                                    -var 'subnet_id=${params.SUBNET_ID}' \
                                     -var 'tags={\"Name\":\"dami-fme-engine-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
                                     ${env.PACKER_TEMPLATE} | tee packer-engine.log
                             """

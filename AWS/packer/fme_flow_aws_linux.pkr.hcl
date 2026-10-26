@@ -21,6 +21,16 @@ variable "source_ami" {
   default = "ami-0d6dd9e8265d48906" # Ubuntu 24.04 LTS us-east-1
 }
 
+variable "vpc_id" {
+  type        = string
+  description = "VPC ID to use for Packer build instances"
+}
+
+variable "subnet_id" {
+  type        = string
+  description = "Public subnet ID to use for Packer build instances"
+}
+
 variable "tags" {
   type = map(string)
   default = {
@@ -41,8 +51,8 @@ source "amazon-ebs" "fme_core_linux" {
   region                 = var.region
   source_ami             = var.source_ami
   ssh_username           = "ubuntu"
-  vpc_id                 = "vpc-05185b550bd6a5f29"
-  subnet_id              = "subnet-0d9fa5cdf9cb83f73"
+  vpc_id                      = var.vpc_id
+  subnet_id                   = var.subnet_id
   associate_public_ip_address = true
 
   launch_block_device_mappings {
@@ -71,8 +81,8 @@ source "amazon-ebs" "fme_engine_linux" {
   region                 = var.region
   source_ami             = var.source_ami
   ssh_username           = "ubuntu"
-  vpc_id                 = "vpc-05185b550bd6a5f29"
-  subnet_id              = "subnet-0d9fa5cdf9cb83f73"
+  vpc_id                      = var.vpc_id
+  subnet_id                   = var.subnet_id
   associate_public_ip_address = true
 
   launch_block_device_mappings {
@@ -104,7 +114,7 @@ build {
       "INSTALLER_URL=${var.installer_url}",
       "FME_ROLE=core"
     ]
-    execute_command = "sudo env {{ range .Env }}{{ . }} {{ end }} bash '{{ .Path }}'"
+    execute_command = "sudo env {{ .Vars }} bash '{{ .Path }}'"
   }
 
   provisioner "file" {
@@ -124,7 +134,7 @@ build {
       "INSTALLER_URL=${var.installer_url}",
       "FME_ROLE=engine"
     ]
-    execute_command = "sudo env {{ range .Env }}{{ . }} {{ end }} bash '{{ .Path }}'"
+    execute_command = "sudo env {{ .Vars }} bash '{{ .Path }}'"
   }
 
   provisioner "file" {
