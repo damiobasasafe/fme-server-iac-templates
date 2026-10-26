@@ -8,7 +8,7 @@ echo "==> Updating system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y curl wget unzip nfs-common
+apt-get install -y curl wget unzip zip nfs-common
 
 # Install AWS CLI v2
 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
