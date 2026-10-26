@@ -104,7 +104,7 @@ build {
       "INSTALLER_URL=${var.installer_url}",
       "FME_ROLE=core"
     ]
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "sudo env {{ range .Env }}{{ . }} {{ end }} bash '{{ .Path }}'"
   }
 
   provisioner "file" {
@@ -124,7 +124,7 @@ build {
       "INSTALLER_URL=${var.installer_url}",
       "FME_ROLE=engine"
     ]
-    execute_command = "sudo -E bash '{{ .Path }}'"
+    execute_command = "sudo env {{ range .Env }}{{ . }} {{ end }} bash '{{ .Path }}'"
   }
 
   provisioner "file" {
