@@ -74,8 +74,9 @@ pipeline {
                             script {
                                 def log = readFile('packer-core.log')
                                 def amiMatch = log =~ /ami-[a-z0-9]{17}/
-                                if (amiMatch) {
-                                    env.CORE_AMI_ID = amiMatch[amiMatch.count - 1]
+                                def amiList = amiMatch.collect { it }
+                                if (amiList) {
+                                    env.CORE_AMI_ID = amiList[amiList.size() - 1]
                                     echo "Core AMI ID: ${env.CORE_AMI_ID}"
                                 } else {
                                     error('Failed to extract Core AMI ID from Packer output')
@@ -102,8 +103,9 @@ pipeline {
                             script {
                                 def log = readFile('packer-engine.log')
                                 def amiMatch = log =~ /ami-[a-z0-9]{17}/
-                                if (amiMatch) {
-                                    env.ENGINE_AMI_ID = amiMatch[amiMatch.count - 1]
+                                def amiList = amiMatch.collect { it }
+                                if (amiList) {
+                                    env.ENGINE_AMI_ID = amiList[amiList.size() - 1]
                                     echo "Engine AMI ID: ${env.ENGINE_AMI_ID}"
                                 } else {
                                     error('Failed to extract Engine AMI ID from Packer output')
