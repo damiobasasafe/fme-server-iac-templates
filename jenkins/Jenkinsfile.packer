@@ -61,6 +61,7 @@ pipeline {
                     steps {
                         dir(env.PACKER_DIR) {
                             sh """
+                                set -o pipefail
                                 packer build \
                                     -only='dami-fme-core-linux.amazon-ebs.fme_core_linux' \
                                     -var 'region=${params.AWS_REGION}' \
@@ -90,6 +91,7 @@ pipeline {
                     steps {
                         dir(env.PACKER_DIR) {
                             sh """
+                                set -o pipefail
                                 packer build \
                                     -only='dami-fme-engine-linux.amazon-ebs.fme_engine_linux' \
                                     -var 'region=${params.AWS_REGION}' \

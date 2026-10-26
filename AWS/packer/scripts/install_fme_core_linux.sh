@@ -22,7 +22,7 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Core (unattended)"
-echo "y" | "$INSTALLER_FILE" --nox11
+yes "Yes" | "$INSTALLER_FILE" --nox11
 
 echo "==> Creating config directory"
 mkdir -p /opt/fmeflow
