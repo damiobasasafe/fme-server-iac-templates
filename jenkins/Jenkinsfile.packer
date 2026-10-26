@@ -1,5 +1,5 @@
 // Dami - FME Flow Packer AMI Build Pipeline
-// Builds FME Core and Engine AMIs using Packer and publishes AMI IDs as artifacts
+// Builds FME Core and Engine AMIs (Ubuntu 24.04 Linux) using Packer
 
 pipeline {
     agent any
@@ -7,13 +7,13 @@ pipeline {
     parameters {
         string(
             name: 'FME_INSTALLER_URL',
-            defaultValue: '',
-            description: 'URL to the FME Flow installer (.exe). Required.'
+            defaultValue: 'https://downloads.safe.com/fme/2026/ubu_24/fme-flow-2026.3.1-b26656-linux-x64~ubuntu.24.04.run',
+            description: 'URL to the FME Flow Linux installer (.run). Required.'
         )
         string(
             name: 'SOURCE_AMI',
-            defaultValue: 'ami-0c1a9930d2846de36',
-            description: 'Base Windows Server 2022 AMI ID (us-east-1 default)'
+            defaultValue: 'ami-0d6dd9e8265d48906',
+            description: 'Base Ubuntu 24.04 LTS AMI ID (us-east-1 default)'
         )
         string(
             name: 'AWS_REGION',
@@ -29,6 +29,7 @@ pipeline {
 
     environment {
         PACKER_DIR        = 'AWS/packer'
+        PACKER_TEMPLATE   = 'fme_flow_aws_linux.pkr.hcl'
         PACKER_LOG        = '1'
         PACKER_LOG_PATH   = 'packer-build.log'
     }
@@ -49,7 +50,7 @@ pipeline {
         stage('Packer Init') {
             steps {
                 dir(env.PACKER_DIR) {
-                    sh 'packer init fme_flow_aws.pkr.hcl'
+                    sh "packer init ${env.PACKER_TEMPLATE}"
                 }
             }
         }
@@ -61,12 +62,12 @@ pipeline {
                         dir(env.PACKER_DIR) {
                             sh """
                                 packer build \
-                                    -only='fme-core-2025.amazon-ebs.fme_core' \
+                                    -only='dami-fme-core-linux.amazon-ebs.fme_core_linux' \
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
                                     -var 'source_ami=${params.SOURCE_AMI}' \
-                                    -var 'tags={\"Name\":\"dami-fme-core-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\"}' \
-                                    fme_flow_aws.pkr.hcl | tee packer-core.log
+                                    -var 'tags={\"Name\":\"dami-fme-core-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
+                                    ${env.PACKER_TEMPLATE} | tee packer-core.log
                             """
                             script {
                                 def log = readFile('packer-core.log')
@@ -87,12 +88,12 @@ pipeline {
                         dir(env.PACKER_DIR) {
                             sh """
                                 packer build \
-                                    -only='fme-engine-2025.amazon-ebs.fme_engine' \
+                                    -only='dami-fme-engine-linux.amazon-ebs.fme_engine_linux' \
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
                                     -var 'source_ami=${params.SOURCE_AMI}' \
-                                    -var 'tags={\"Name\":\"dami-fme-engine-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\"}' \
-                                    fme_flow_aws.pkr.hcl | tee packer-engine.log
+                                    -var 'tags={\"Name\":\"dami-fme-engine-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
+                                    ${env.PACKER_TEMPLATE} | tee packer-engine.log
                             """
                             script {
                                 def log = readFile('packer-engine.log')
