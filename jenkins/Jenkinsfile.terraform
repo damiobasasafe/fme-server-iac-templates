@@ -67,6 +67,7 @@ pipeline {
                 expression { params.ACTION == 'apply' }
             }
             steps {
+                // withCredentials injects TF_VAR_* env vars; terraform reads them automatically
                 withCredentials([
                     string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
                     string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
@@ -74,7 +75,7 @@ pipeline {
                 ]) {
                     dir(env.TF_DIR) {
                         script {
-                            def tfVarArgs = "-var-file='envs/${params.ENVIRONMENT}.tfvars' -var 'ad_admin_pw=\${TF_VAR_ad_admin_pw}' -var 'db_admin_user=\${TF_VAR_db_admin_user}' -var 'db_admin_pw=\${TF_VAR_db_admin_pw}'"
+                            def varFile = "-var-file='envs/${params.ENVIRONMENT}.tfvars'"
 
                             def resources = [
                                 ['module.iam.aws_iam_role.fme_flow',                  'tf-EC2JoinAD'],
@@ -93,7 +94,7 @@ pipeline {
                                 if (already == 'yes') {
                                     echo "${addr} already in state, skipping"
                                 } else {
-                                    sh "terraform import ${tfVarArgs} '${addr}' '${awsId}' || echo 'Import skipped: ${addr}'"
+                                    sh "terraform import ${varFile} '${addr}' '${awsId}' || echo 'Import skipped: ${addr}'"
                                 }
                             }
                         }
@@ -104,6 +105,9 @@ pipeline {
 
         stage('Terraform Plan') {
             steps {
+                // withCredentials sets TF_VAR_ad_admin_pw, TF_VAR_db_admin_user, TF_VAR_db_admin_pw
+                // in the environment; terraform picks these up automatically via TF_VAR_* convention.
+                // Do NOT pass them as -var flags — single-quoted shell args prevent expansion.
                 withCredentials([
                     string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
                     string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
@@ -122,9 +126,6 @@ pipeline {
                             sh """
                                 terraform plan \
                                     -var-file='envs/${params.ENVIRONMENT}.tfvars' \
-                                    -var 'ad_admin_pw=\${TF_VAR_ad_admin_pw}' \
-                                    -var 'db_admin_user=\${TF_VAR_db_admin_user}' \
-                                    -var 'db_admin_pw=\${TF_VAR_db_admin_pw}' \
                                     ${amiVars} \
                                     -out=tfplan \
                                     -detailed-exitcode || [ \$? -eq 2 ]
@@ -140,15 +141,21 @@ pipeline {
                 expression { params.ACTION == 'apply' }
             }
             steps {
-                dir(env.TF_DIR) {
-                    sh 'terraform apply -auto-approve tfplan'
-                    script {
-                        env.ALB_DNS = sh(
-                            script: "terraform output -raw alb_dns_name 2>/dev/null || echo ''",
-                            returnStdout: true
-                        ).trim()
-                        if (env.ALB_DNS) {
-                            echo "FME Flow URL: http://${env.ALB_DNS}/fmeserver"
+                withCredentials([
+                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                ]) {
+                    dir(env.TF_DIR) {
+                        sh 'terraform apply -auto-approve tfplan'
+                        script {
+                            env.ALB_DNS = sh(
+                                script: "terraform output -raw alb_dns_name 2>/dev/null || echo ''",
+                                returnStdout: true
+                            ).trim()
+                            if (env.ALB_DNS) {
+                                echo "FME Flow URL: http://${env.ALB_DNS}/fmeserver"
+                            }
                         }
                     }
                 }
@@ -178,9 +185,6 @@ pipeline {
                             sh """
                                 terraform destroy \
                                     -var-file='envs/${params.ENVIRONMENT}.tfvars' \
-                                    -var 'ad_admin_pw=\${TF_VAR_ad_admin_pw}' \
-                                    -var 'db_admin_user=\${TF_VAR_db_admin_user}' \
-                                    -var 'db_admin_pw=\${TF_VAR_db_admin_pw}' \
                                     ${amiVars} \
                                     -auto-approve
                             """
@@ -195,19 +199,25 @@ pipeline {
                 expression { params.ACTION == 'apply' }
             }
             steps {
-                dir(env.TF_DIR) {
-                    sh 'terraform output'
-                    script {
-                        if (env.ALB_DNS) {
-                            writeFile file: 'deploy-output.env', text: """ENVIRONMENT=${params.ENVIRONMENT}
+                withCredentials([
+                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                ]) {
+                    dir(env.TF_DIR) {
+                        sh 'terraform output'
+                        script {
+                            if (env.ALB_DNS) {
+                                writeFile file: 'deploy-output.env', text: """ENVIRONMENT=${params.ENVIRONMENT}
 ALB_DNS=${env.ALB_DNS}
 FME_FLOW_URL=http://${env.ALB_DNS}/fmeserver
 CORE_AMI_ID=${params.CORE_AMI_ID}
 ENGINE_AMI_ID=${params.ENGINE_AMI_ID}
 """
+                            }
                         }
+                        archiveArtifacts artifacts: 'deploy-output.env', allowEmptyArchive: true
                     }
-                    archiveArtifacts artifacts: 'deploy-output.env', allowEmptyArchive: true
                 }
             }
         }
