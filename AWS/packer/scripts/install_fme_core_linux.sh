@@ -22,9 +22,10 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Core (unattended)"
-# Pass -f /dev/null to the embedded install.sh via -- which sets INSTALL_NONINTERACTIVE=Yes
-# This skips the EULA pager and license prompt entirely (confirmed from install.sh source)
-"$INSTALLER_FILE" --nox11 -- -f /dev/null
+# -f <file> sets INSTALL_NONINTERACTIVE=Yes, skipping EULA and license prompt
+# (confirmed from embedded install.sh source: it reads the file with eval then sets INSTALL_NONINTERACTIVE=Yes)
+touch /tmp/fme-install.properties
+"$INSTALLER_FILE" --nox11 -- -f /tmp/fme-install.properties
 
 echo "==> Creating config directory"
 mkdir -p /opt/fmeflow
