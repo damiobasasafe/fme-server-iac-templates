@@ -27,7 +27,9 @@ expect -c "
   spawn $INSTALLER_FILE --nox11
   expect \"Yes/No\" { send \"Yes\r\" }
   expect \"Yes/No\" { send \"Yes\r\" }
-  expect eof
+  expect { eof {} timeout {} }
+  catch wait result
+  exit [lindex \$result 3]
 "
 
 echo "==> Creating config directory"
