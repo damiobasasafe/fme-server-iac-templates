@@ -68,4 +68,16 @@ foreach ($svc in $serviceNames) {
 Log "Cleaning up installer..."
 Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
 
+# ── Reset EC2Launch state so user data runs on first instance boot ─────────────
+# Without this, EC2Launch sees the .run-once marker left from the Packer build
+# and skips user data entirely when new instances launch from this AMI.
+Log "Resetting EC2Launch state for clean first-boot on instance launch..."
+$ec2LaunchBin = "C:\ProgramData\Amazon\EC2Launch\bin\EC2Launch.exe"
+if (Test-Path $ec2LaunchBin) {
+    & $ec2LaunchBin reset --block
+    Log "EC2Launch reset complete."
+} else {
+    Log "WARNING: EC2Launch binary not found at expected path, skipping reset."
+}
+
 Log "=== FME Flow Core Windows Install Complete ==="

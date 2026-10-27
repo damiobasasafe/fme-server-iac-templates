@@ -8,15 +8,15 @@ resource "aws_lb" "fme_flow_alb" {
 
 resource "aws_lb_target_group" "fme_flow_core" {
   name     = "fmeflow-core"
-  port     = 8080
+  port     = 80
   protocol = "HTTP"
   vpc_id   = var.vpc_id
 
   health_check {
-    path = "/fmeapiv4/healthcheck/liveness"
+    path     = "/fmeapiv4/healthcheck/liveness"
     protocol = "HTTP"
-    port = "80"
-    matcher = "200"
+    port     = "traffic-port"
+    matcher  = "200"
   }
 }
 
