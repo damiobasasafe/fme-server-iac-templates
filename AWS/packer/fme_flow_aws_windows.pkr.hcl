@@ -94,7 +94,7 @@ source "amazon-ebs" "fme_core_windows" {
 
   aws_polling {
     delay_seconds = 30
-    max_attempts  = 60
+    max_attempts  = 120
   }
 
   tags            = merge(var.tags, { Role = "fme-core" })
@@ -132,7 +132,7 @@ source "amazon-ebs" "fme_engine_windows" {
 
   aws_polling {
     delay_seconds = 30
-    max_attempts  = 60
+    max_attempts  = 120
   }
 
   tags            = merge(var.tags, { Role = "fme-engine" })
