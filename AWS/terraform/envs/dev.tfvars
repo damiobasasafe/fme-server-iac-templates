@@ -22,9 +22,9 @@ nlb_name = "dami-fmeflow-dev-nlb"
 # Active Directory
 ad_name = "dev-fmeflow.safe"
 
-# AMI IDs - populated by Packer pipeline
-fme_core_image_id   = ""
-fme_engine_image_id = ""
+# AMI IDs - populated by Packer pipeline (build #21, 2026-10-27)
+fme_core_image_id   = "ami-0b5cf2737ce9c2072"
+fme_engine_image_id = "ami-0702203226208f967"
 
 # Secrets - injected by Jenkins from AWS Secrets Manager, do not hardcode
 # ad_admin_pw  = injected at runtime
