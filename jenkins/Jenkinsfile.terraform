@@ -54,7 +54,8 @@ pipeline {
                     sh """
                         terraform init \
                             -backend-config="key=fmeflow/${params.ENVIRONMENT}/terraform.tfstate" \
-                            -reconfigure
+                            -reconfigure \
+                            -upgrade
                     """
                     sh "terraform workspace select ${params.ENVIRONMENT} || terraform workspace new ${params.ENVIRONMENT}"
                 }
