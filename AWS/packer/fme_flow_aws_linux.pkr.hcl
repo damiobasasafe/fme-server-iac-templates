@@ -119,7 +119,14 @@ build {
 
   provisioner "file" {
     source      = "scripts/config_fmeflow_linux.sh"
-    destination = "/opt/fmeflow/config_fmeflow_linux.sh"
+    destination = "/tmp/config_fmeflow_linux.sh"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo mv /tmp/config_fmeflow_linux.sh /opt/fmeflow/config_fmeflow_linux.sh",
+      "sudo chmod +x /opt/fmeflow/config_fmeflow_linux.sh"
+    ]
   }
 }
 
@@ -139,6 +146,13 @@ build {
 
   provisioner "file" {
     source      = "scripts/config_fmeflow_linux.sh"
-    destination = "/opt/fmeflow/config_fmeflow_linux.sh"
+    destination = "/tmp/config_fmeflow_linux.sh"
+  }
+
+  provisioner "shell" {
+    inline = [
+      "sudo mv /tmp/config_fmeflow_linux.sh /opt/fmeflow/config_fmeflow_linux.sh",
+      "sudo chmod +x /opt/fmeflow/config_fmeflow_linux.sh"
+    ]
   }
 }
