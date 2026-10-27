@@ -1,5 +1,5 @@
 // Dami - FME Flow Packer AMI Build Pipeline
-// Builds FME Core and Engine AMIs (Ubuntu 24.04 Linux) using Packer
+// Builds FME Core and Engine AMIs (Windows Server 2022) using Packer
 
 pipeline {
     agent any
@@ -7,13 +7,8 @@ pipeline {
     parameters {
         string(
             name: 'FME_INSTALLER_URL',
-            defaultValue: 'https://downloads.safe.com/fme/2026/ubu_24/fme-flow-2026.3.1-b26656-linux-x64~ubuntu.24.04.run',
-            description: 'URL to the FME Flow Linux installer (.run). Required.'
-        )
-        string(
-            name: 'SOURCE_AMI',
-            defaultValue: 'ami-0d6dd9e8265d48906',
-            description: 'Base Ubuntu 24.04 LTS AMI ID (us-east-1 default)'
+            defaultValue: 'https://downloads.safe.com/fme/2026/win64/fme-flow-2026.3.1-b26656-win-x64.exe',
+            description: 'URL to the FME Flow Windows installer (.exe). Required.'
         )
         string(
             name: 'AWS_REGION',
@@ -28,10 +23,10 @@ pipeline {
     }
 
     environment {
-        PACKER_DIR        = 'AWS/packer'
-        PACKER_TEMPLATE   = 'fme_flow_aws_linux.pkr.hcl'
-        PACKER_LOG        = '1'
-        PACKER_LOG_PATH   = 'packer-build.log'
+        PACKER_DIR      = 'AWS/packer'
+        PACKER_TEMPLATE = 'fme_flow_aws_windows.pkr.hcl'
+        PACKER_LOG      = '1'
+        PACKER_LOG_PATH = 'packer-build.log'
     }
 
     stages {
@@ -63,13 +58,12 @@ pipeline {
                             sh """
                                 set -o pipefail
                                 packer build \
-                                    -only='dami-fme-core-linux.amazon-ebs.fme_core_linux' \
+                                    -only='dami-fme-core-windows.amazon-ebs.fme_core_windows' \
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
-                                    -var 'source_ami=${params.SOURCE_AMI}' \
                                     -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \
                                     -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \
-                                    -var 'tags={\"Name\":\"dami-fme-core-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
+                                    -var 'tags={"Name":"dami-fme-core-windows-${params.FME_VERSION}","Version":"${params.FME_VERSION}","ManagedBy":"Dami-CICD","OS":"Windows-Server-2022"}' \
                                     ${env.PACKER_TEMPLATE} | tee packer-core.log
                             """
                             script {
@@ -93,13 +87,12 @@ pipeline {
                             sh """
                                 set -o pipefail
                                 packer build \
-                                    -only='dami-fme-engine-linux.amazon-ebs.fme_engine_linux' \
+                                    -only='dami-fme-engine-windows.amazon-ebs.fme_engine_windows' \
                                     -var 'region=${params.AWS_REGION}' \
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \
-                                    -var 'source_ami=${params.SOURCE_AMI}' \
                                     -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \
                                     -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \
-                                    -var 'tags={\"Name\":\"dami-fme-engine-${params.FME_VERSION}\",\"Version\":\"${params.FME_VERSION}\",\"ManagedBy\":\"Dami-CICD\",\"OS\":\"Ubuntu-24.04\"}' \
+                                    -var 'tags={"Name":"dami-fme-engine-windows-${params.FME_VERSION}","Version":"${params.FME_VERSION}","ManagedBy":"Dami-CICD","OS":"Windows-Server-2022"}' \
                                     ${env.PACKER_TEMPLATE} | tee packer-engine.log
                             """
                             script {
@@ -125,7 +118,6 @@ pipeline {
                     echo "Core AMI:   ${env.CORE_AMI_ID}"
                     echo "Engine AMI: ${env.ENGINE_AMI_ID}"
 
-                    // Write AMI IDs to file for downstream pipelines to consume
                     writeFile file: 'ami-ids.env', text: """CORE_AMI_ID=${env.CORE_AMI_ID}
 ENGINE_AMI_ID=${env.ENGINE_AMI_ID}
 FME_VERSION=${params.FME_VERSION}
@@ -140,7 +132,7 @@ AWS_REGION=${params.AWS_REGION}
 
     post {
         failure {
-            echo 'Packer build failed. Check packer-build.log for details.'
+            echo 'Packer build failed. Check packer-*.log for details.'
             archiveArtifacts artifacts: 'AWS/packer/packer-*.log', allowEmptyArchive: true
         }
         success {
