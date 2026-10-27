@@ -22,11 +22,11 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Core (unattended)"
-TERM=dumb expect -c "
+expect -c "
   set timeout 600
-  spawn -noecho env TERM=dumb $INSTALLER_FILE --nox11
-  expect \"Yes/No\" { send \"Yes\r\" }
-  expect \"Yes/No\" { send \"Yes\r\" }
+  spawn -noecho env PAGER=cat TERM=dumb $INSTALLER_FILE --nox11
+  expect -re {Yes/No.*:} { send \"Yes\r\" }
+  expect -re {Yes/No.*:} { send \"Yes\r\" }
   expect { eof {} timeout {} }
   catch wait result
   exit [lindex \$result 3]
