@@ -1,0 +1,167 @@
+// Dami - FME Flow Project Sync Pipeline
+// Exports a project from a source FME Flow environment and imports it into a target environment.
+// Uses the FME Flow CLI (fmeflow-cli) which wraps the FME Flow REST API.
+//
+// Credential IDs required in Jenkins:
+//   dami-fmeflow-dev-token    - FME Flow API token for dev environment
+//   dami-fmeflow-staging-token - FME Flow API token for staging environment
+//   dami-fmeflow-prod-token   - FME Flow API token for prod environment
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'SOURCE_ENV',
+            choices: ['dev', 'staging'],
+            description: 'Environment to export the project FROM'
+        )
+        choice(
+            name: 'TARGET_ENV',
+            choices: ['staging', 'prod'],
+            description: 'Environment to import the project INTO'
+        )
+        string(
+            name: 'PROJECT_NAME',
+            defaultValue: '',
+            description: 'Name of the FME Flow project to sync (must exist in the source environment)'
+        )
+        booleanParam(
+            name: 'OVERWRITE',
+            defaultValue: true,
+            description: 'Overwrite the project in the target environment if it already exists'
+        )
+    }
+
+    environment {
+        FME_CLI      = 'fmeflow'
+        EXPORT_FILE  = "fmeflow-project-${params.PROJECT_NAME ?: 'project'}.fsproject"
+
+        // FME Flow URLs per environment - update these to match your deployments
+        DEV_URL     = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
+        STAGING_URL = 'http://dami-fmeflow-staging-alb.us-east-1.elb.amazonaws.com'
+        PROD_URL    = 'http://dami-fmeflow-prod-alb.us-east-1.elb.amazonaws.com'
+    }
+
+    stages {
+        stage('Validate') {
+            steps {
+                script {
+                    if (!params.PROJECT_NAME?.trim()) {
+                        error 'PROJECT_NAME is required'
+                    }
+                    if (params.SOURCE_ENV == params.TARGET_ENV) {
+                        error 'SOURCE_ENV and TARGET_ENV must be different environments'
+                    }
+                    if (params.TARGET_ENV == 'prod') {
+                        input message: "You are promoting '${params.PROJECT_NAME}' to PRODUCTION from ${params.SOURCE_ENV}. Continue?",
+                              ok: 'Yes, promote to prod'
+                    }
+                }
+            }
+        }
+
+        stage('Setup FME Flow CLI') {
+            steps {
+                script {
+                    def installed = sh(
+                        script: 'fmeflow --version 2>/dev/null && echo OK || echo MISSING',
+                        returnStdout: true
+                    ).trim()
+
+                    if (!installed.contains('OK')) {
+                        echo 'FME Flow CLI not found, installing...'
+                        sh 'pip3 install fmeflow-cli --quiet'
+                        sh 'fmeflow --version'
+                    } else {
+                        echo "FME Flow CLI already installed: ${installed}"
+                    }
+                }
+            }
+        }
+
+        stage('Export Project from Source') {
+            steps {
+                script {
+                    def sourceUrl = getEnvUrl(params.SOURCE_ENV)
+                    def credId    = "dami-fmeflow-${params.SOURCE_ENV}-token"
+
+                    withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
+                        echo "Logging into source: ${params.SOURCE_ENV} (${sourceUrl})"
+                        sh "${env.FME_CLI} login --url ${sourceUrl} --token \$FME_TOKEN"
+
+                        echo "Exporting project: ${params.PROJECT_NAME}"
+                        sh "${env.FME_CLI} projects download --project-name '${params.PROJECT_NAME}' --output '${env.EXPORT_FILE}'"
+
+                        sh "ls -lh '${env.EXPORT_FILE}'"
+                    }
+                }
+            }
+        }
+
+        stage('Import Project to Target') {
+            steps {
+                script {
+                    def targetUrl = getEnvUrl(params.TARGET_ENV)
+                    def credId    = "dami-fmeflow-${params.TARGET_ENV}-token"
+                    def overwrite = params.OVERWRITE ? '--overwrite' : ''
+
+                    withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
+                        echo "Logging into target: ${params.TARGET_ENV} (${targetUrl})"
+                        sh "${env.FME_CLI} login --url ${targetUrl} --token \$FME_TOKEN"
+
+                        echo "Importing project to ${params.TARGET_ENV}..."
+                        sh "${env.FME_CLI} projects upload --file '${env.EXPORT_FILE}' ${overwrite}"
+
+                        echo "Import complete."
+                    }
+                }
+            }
+        }
+
+        stage('Verify') {
+            steps {
+                script {
+                    def targetUrl = getEnvUrl(params.TARGET_ENV)
+                    def credId    = "dami-fmeflow-${params.TARGET_ENV}-token"
+
+                    withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
+                        sh "${env.FME_CLI} login --url ${targetUrl} --token \$FME_TOKEN"
+                        def result = sh(
+                            script: "${env.FME_CLI} projects list | grep -i '${params.PROJECT_NAME}' || echo NOT_FOUND",
+                            returnStdout: true
+                        ).trim()
+
+                        if (result.contains('NOT_FOUND')) {
+                            error "Project '${params.PROJECT_NAME}' not found in ${params.TARGET_ENV} after import. Check the import step above."
+                        } else {
+                            echo "Verified: '${params.PROJECT_NAME}' is present in ${params.TARGET_ENV}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh "rm -f '${env.EXPORT_FILE}'"
+        }
+        success {
+            echo "Sync complete: '${params.PROJECT_NAME}' promoted from ${params.SOURCE_ENV} to ${params.TARGET_ENV}"
+        }
+        failure {
+            echo "Sync FAILED for project '${params.PROJECT_NAME}'. Check logs above."
+        }
+    }
+}
+
+// Returns the FME Flow base URL for the given environment name
+def getEnvUrl(String envName) {
+    switch (envName) {
+        case 'dev':     return env.DEV_URL
+        case 'staging': return env.STAGING_URL
+        case 'prod':    return env.PROD_URL
+        default:        error "Unknown environment: ${envName}"
+    }
+}
