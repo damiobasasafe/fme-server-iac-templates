@@ -8,7 +8,7 @@ echo "==> Updating system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y curl wget unzip zip nfs-common expect
+apt-get install -y curl wget unzip zip nfs-common perl
 
 # Install AWS CLI v2
 curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "/tmp/awscliv2.zip"
@@ -22,15 +22,9 @@ curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_FILE"
 chmod +x "$INSTALLER_FILE"
 
 echo "==> Installing FME Flow Core (unattended)"
-expect -c "
-  set timeout 600
-  spawn -noecho env PAGER=cat TERM=dumb $INSTALLER_FILE --nox11
-  expect -re {Yes/No.*:} { send \"Yes\r\" }
-  expect -re {Yes/No.*:} { send \"Yes\r\" }
-  expect { eof {} timeout {} }
-  catch wait result
-  exit [lindex \$result 3]
-"
+# Pass -f /dev/null to the embedded install.sh via -- which sets INSTALL_NONINTERACTIVE=Yes
+# This skips the EULA pager and license prompt entirely (confirmed from install.sh source)
+"$INSTALLER_FILE" --nox11 -- -f /dev/null
 
 echo "==> Creating config directory"
 mkdir -p /opt/fmeflow
