@@ -87,7 +87,7 @@ pipeline {
                                     -var 'db_admin_pw=\${TF_VAR_db_admin_pw}' \
                                     ${amiVars} \
                                     -out=tfplan \
-                                    -detailed-exitcode
+                                    -detailed-exitcode || [ \$? -eq 2 ]
                             """
                         }
                     }
