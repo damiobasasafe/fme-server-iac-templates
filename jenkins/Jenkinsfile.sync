@@ -123,10 +123,8 @@ pipeline {
                         echo "Connecting to source: ${params.SOURCE_ENV} (${sourceUrl})"
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
-                        echo "Token user check (v3):"
-                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmerest/v3/users/current.json" || true"""
-                        echo "All users:"
-                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/users" || true"""
+                        echo "Projects owned by admin:"
+                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects?owner=admin" || true"""
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
