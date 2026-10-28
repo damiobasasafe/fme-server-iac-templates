@@ -124,7 +124,7 @@ pipeline {
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
-                        sh "${env.FME_CLI} projects download --project-name '${params.PROJECT_NAME}' --output '${env.EXPORT_FILE}'"
+                        sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
 
                         def size = sh(script: "du -sh '${env.EXPORT_FILE}' | cut -f1", returnStdout: true).trim()
                         echo "Export complete. File: ${env.EXPORT_FILE} (${size})"
@@ -152,7 +152,7 @@ pipeline {
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
 
                         echo "Importing project '${params.PROJECT_NAME}' into ${params.TARGET_ENV}..."
-                        sh "${env.FME_CLI} projects upload --file '${env.EXPORT_FILE}' ${overwrite}"
+                        sh "${env.FME_CLI} projects upload -f '${env.EXPORT_FILE}' ${overwrite}"
                         echo "Import complete."
                     }
                 }
