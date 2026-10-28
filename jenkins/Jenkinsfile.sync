@@ -124,7 +124,8 @@ pipeline {
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
                         echo "Available projects in ${params.SOURCE_ENV}:"
-                        sh "${env.FME_CLI} projects || true"
+                        sh "${env.FME_CLI} projects --json || true"
+                        sh "${env.FME_CLI} projects --api-version v4 || true"
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
