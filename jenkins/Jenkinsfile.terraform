@@ -1,5 +1,27 @@
-// Dami - FME Flow Terraform Infrastructure Pipeline
-// Provisions FME Flow distributed infrastructure on AWS using Terraform
+// =============================================================================
+// Build 2: FME Flow Infrastructure Provisioner
+// =============================================================================
+// Provisions the full FME Flow distributed deployment on AWS using Terraform.
+//
+// Resources created:
+//   - VPC, subnets, internet gateway, NAT gateway (network)
+//   - Application Load Balancer (user traffic on port 80)
+//   - Network Load Balancer (engine registration on port 7070)
+//   - RDS PostgreSQL (FME Flow database)
+//   - FSx for Windows File Server (shared workspace storage)
+//   - Managed Microsoft Active Directory (domain join for distributed auth)
+//   - Core Auto Scaling Group (FME Flow Core nodes)
+//   - Standard Engine Auto Scaling Group (fixed engine pool)
+//   - Dynamic Engine Auto Scaling Group (CPU-based auto-scaling engines)
+//   - IAM roles, instance profiles, security groups, Secrets Manager secrets
+//
+// Prerequisites:
+//   - Build 1 (Packer) must have completed and produced Core and Engine AMI IDs
+//   - Jenkins credentials must exist: dami-tf-ad-admin-pw, dami-tf-db-admin-user,
+//     dami-tf-db-admin-pw
+//
+// Remote state: stored in S3, locked with DynamoDB.
+// =============================================================================
 
 pipeline {
     agent any
@@ -7,94 +29,111 @@ pipeline {
     parameters {
         choice(
             name: 'ENVIRONMENT',
-            choices: ['dev', 'staging', 'prod'],
-            description: 'Target environment to deploy to'
+            choices: ['cicd-deploy', 'dev', 'staging', 'prod'],
+            description: 'Target environment to deploy. Each environment uses its own tfvars file and remote state key.'
         )
         choice(
             name: 'ACTION',
             choices: ['plan', 'apply', 'destroy'],
-            description: 'Terraform action to perform'
+            description: 'Terraform action to perform. Always run plan before apply to review changes.'
         )
         string(
             name: 'CORE_AMI_ID',
             defaultValue: '',
-            description: 'FME Core AMI ID (from Packer pipeline). Leave blank to use value in tfvars.'
+            description: 'FME Core AMI ID from Build 1 (Packer). Leave blank to use the value already in the tfvars file.'
         )
         string(
             name: 'ENGINE_AMI_ID',
             defaultValue: '',
-            description: 'FME Engine AMI ID (from Packer pipeline). Leave blank to use value in tfvars.'
+            description: 'FME Engine AMI ID from Build 1 (Packer). Leave blank to use the value already in the tfvars file.'
         )
     }
 
     environment {
-        TF_DIR        = 'AWS/terraform'
-        TF_VAR_FILE   = "AWS/terraform/envs/${params.ENVIRONMENT}.tfvars"
-        AWS_REGION    = 'us-east-1'
+        TF_DIR           = 'AWS/terraform'
+        AWS_REGION       = 'us-east-1'
         TF_IN_AUTOMATION = 'true'
     }
 
     stages {
-        stage('Validate') {
+
+        stage('Preflight Checks') {
+            // Verify Terraform and AWS CLI are available and the correct AWS
+            // account is being targeted before making any changes.
             steps {
-                sh 'terraform version'
-                sh 'aws sts get-caller-identity'
                 script {
                     if (params.ACTION == 'destroy' && params.ENVIRONMENT == 'prod') {
-                        input message: 'You are about to DESTROY PRODUCTION. Are you absolutely sure?',
+                        input message: "You are about to DESTROY the PRODUCTION environment. This cannot be undone. Are you sure?",
                               ok: 'Yes, destroy production'
                     }
                 }
+                sh '''
+                    echo "=== Tool versions ==="
+                    terraform version
+                    aws --version
+                    echo "=== AWS identity ==="
+                    aws sts get-caller-identity
+                    echo "=== Parameters ==="
+                    echo "Environment: $ENVIRONMENT"
+                    echo "Action:      $ACTION"
+                    echo "Core AMI:    ${CORE_AMI_ID:-from tfvars}"
+                    echo "Engine AMI:  ${ENGINE_AMI_ID:-from tfvars}"
+                '''
             }
         }
 
-        stage('Terraform Init') {
+        stage('Initialise Terraform') {
+            // Downloads providers and configures the remote S3 backend.
+            // Each environment has its own state file key so environments
+            // are completely isolated from each other.
             steps {
                 dir(env.TF_DIR) {
                     sh """
-                        terraform init \
-                            -backend-config="key=fmeflow/${params.ENVIRONMENT}/terraform.tfstate" \
-                            -reconfigure \
+                        terraform init \\
+                            -backend-config="key=fmeflow/${params.ENVIRONMENT}/terraform.tfstate" \\
+                            -reconfigure \\
                             -upgrade
+                        terraform workspace select ${params.ENVIRONMENT} || terraform workspace new ${params.ENVIRONMENT}
+                        echo "Active workspace: \$(terraform workspace show)"
                     """
-                    sh "terraform workspace select ${params.ENVIRONMENT} || terraform workspace new ${params.ENVIRONMENT}"
                 }
             }
         }
 
         stage('Import Existing IAM Resources') {
+            // IAM roles and instance profiles are account-global and may already
+            // exist from a previous deployment. Terraform import brings them into
+            // state so the plan does not try to recreate them (which would fail).
+            // This stage is idempotent — it skips resources already in state.
             when {
                 expression { params.ACTION == 'apply' }
             }
             steps {
-                // withCredentials injects TF_VAR_* env vars; terraform reads them automatically
                 withCredentials([
-                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
-                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
-                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                    string(credentialsId: 'dami-tf-ad-admin-pw',  variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user', variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',   variable: 'TF_VAR_db_admin_pw')
                 ]) {
                     dir(env.TF_DIR) {
                         script {
-                            def varFile = "-var-file='envs/${params.ENVIRONMENT}.tfvars'"
-
                             def resources = [
                                 ['module.iam.aws_iam_role.fme_flow',                  'tf-EC2JoinAD'],
                                 ['module.iam.aws_iam_instance_profile.fme_flow',       'tf-fmeServerEC2JoinAD'],
                                 ['module.iam.aws_iam_role_policy.fme_flow_ec2_join',   'tf-EC2JoinAD:AmazonEC2RoleforSSM-ASGDomainJoin'],
                                 ['module.iam.aws_iam_role_policy.fme_flow_ec2_access', 'tf-EC2JoinAD:AmazonEC2RoleforSecretManager']
                             ]
-
                             resources.each { pair ->
                                 def addr  = pair[0]
                                 def awsId = pair[1]
-                                def already = sh(
+                                def inState = sh(
                                     script: "terraform state show '${addr}' > /dev/null 2>&1 && echo yes || echo no",
                                     returnStdout: true
                                 ).trim()
-                                if (already == 'yes') {
-                                    echo "${addr} already in state, skipping"
+                                if (inState == 'yes') {
+                                    echo "${addr}: already in state, skipping import"
                                 } else {
-                                    sh "terraform import ${varFile} '${addr}' '${awsId}' || echo 'Import skipped: ${addr}'"
+                                    echo "${addr}: importing from AWS..."
+                                    sh "terraform import -var-file='envs/${params.ENVIRONMENT}.tfvars' '${addr}' '${awsId}' || echo 'Import skipped (resource may not exist yet)'"
                                 }
                             }
                         }
@@ -104,30 +143,33 @@ pipeline {
         }
 
         stage('Terraform Plan') {
+            // Generates an execution plan showing exactly what Terraform will
+            // create, change, or destroy. The plan is saved to a file so that
+            // the Apply stage executes precisely what was reviewed — no surprises.
+            //
+            // Sensitive variables (AD password, DB credentials) are injected via
+            // TF_VAR_* environment variables. Never pass secrets as -var flags in
+            // shell commands as they appear in process listings and build logs.
             steps {
-                // withCredentials sets TF_VAR_ad_admin_pw, TF_VAR_db_admin_user, TF_VAR_db_admin_pw
-                // in the environment; terraform picks these up automatically via TF_VAR_* convention.
-                // Do NOT pass them as -var flags — single-quoted shell args prevent expansion.
                 withCredentials([
-                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
-                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
-                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                    string(credentialsId: 'dami-tf-ad-admin-pw',  variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user', variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',   variable: 'TF_VAR_db_admin_pw')
                 ]) {
                     dir(env.TF_DIR) {
                         script {
                             def amiVars = ''
-                            if (params.CORE_AMI_ID) {
+                            if (params.CORE_AMI_ID?.trim()) {
                                 amiVars += " -var 'fme_core_image_id=${params.CORE_AMI_ID}'"
                             }
-                            if (params.ENGINE_AMI_ID) {
+                            if (params.ENGINE_AMI_ID?.trim()) {
                                 amiVars += " -var 'fme_engine_image_id=${params.ENGINE_AMI_ID}'"
                             }
-
                             sh """
-                                terraform plan \
-                                    -var-file='envs/${params.ENVIRONMENT}.tfvars' \
-                                    ${amiVars} \
-                                    -out=tfplan \
+                                terraform plan \\
+                                    -var-file='envs/${params.ENVIRONMENT}.tfvars' \\
+                                    ${amiVars} \\
+                                    -out=tfplan \\
                                     -detailed-exitcode || [ \$? -eq 2 ]
                             """
                         }
@@ -137,14 +179,17 @@ pipeline {
         }
 
         stage('Terraform Apply') {
+            // Applies the plan generated above. Because we apply a saved plan
+            // file, no additional variables are needed — they are already baked
+            // into the plan. This guarantees apply does exactly what plan showed.
             when {
                 expression { params.ACTION == 'apply' }
             }
             steps {
                 withCredentials([
-                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
-                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
-                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                    string(credentialsId: 'dami-tf-ad-admin-pw',  variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user', variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',   variable: 'TF_VAR_db_admin_pw')
                 ]) {
                     dir(env.TF_DIR) {
                         sh 'terraform apply -auto-approve tfplan'
@@ -153,9 +198,6 @@ pipeline {
                                 script: "terraform output -raw alb_dns_name 2>/dev/null || echo ''",
                                 returnStdout: true
                             ).trim()
-                            if (env.ALB_DNS) {
-                                echo "FME Flow URL: http://${env.ALB_DNS}/fmeserver"
-                            }
                         }
                     }
                 }
@@ -163,29 +205,31 @@ pipeline {
         }
 
         stage('Terraform Destroy') {
+            // Destroys all resources in the environment. Only runs when ACTION
+            // is explicitly set to destroy. Production requires manual approval
+            // in the Preflight Checks stage before reaching here.
             when {
                 expression { params.ACTION == 'destroy' }
             }
             steps {
                 withCredentials([
-                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
-                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
-                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                    string(credentialsId: 'dami-tf-ad-admin-pw',  variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user', variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',   variable: 'TF_VAR_db_admin_pw')
                 ]) {
                     dir(env.TF_DIR) {
                         script {
                             def amiVars = ''
-                            if (params.CORE_AMI_ID) {
+                            if (params.CORE_AMI_ID?.trim()) {
                                 amiVars += " -var 'fme_core_image_id=${params.CORE_AMI_ID}'"
                             }
-                            if (params.ENGINE_AMI_ID) {
+                            if (params.ENGINE_AMI_ID?.trim()) {
                                 amiVars += " -var 'fme_engine_image_id=${params.ENGINE_AMI_ID}'"
                             }
-
                             sh """
-                                terraform destroy \
-                                    -var-file='envs/${params.ENVIRONMENT}.tfvars' \
-                                    ${amiVars} \
+                                terraform destroy \\
+                                    -var-file='envs/${params.ENVIRONMENT}.tfvars' \\
+                                    ${amiVars} \\
                                     -auto-approve
                             """
                         }
@@ -194,29 +238,38 @@ pipeline {
             }
         }
 
-        stage('Output Summary') {
+        stage('Deployment Summary') {
+            // Prints the outputs from the Terraform state and saves them as
+            // a Jenkins artifact. The FME Flow URL is ready to use immediately
+            // after this stage completes (allow 5-10 min for EC2 user data to run).
             when {
                 expression { params.ACTION == 'apply' }
             }
             steps {
                 withCredentials([
-                    string(credentialsId: 'dami-tf-ad-admin-pw',   variable: 'TF_VAR_ad_admin_pw'),
-                    string(credentialsId: 'dami-tf-db-admin-user',  variable: 'TF_VAR_db_admin_user'),
-                    string(credentialsId: 'dami-tf-db-admin-pw',    variable: 'TF_VAR_db_admin_pw')
+                    string(credentialsId: 'dami-tf-ad-admin-pw',  variable: 'TF_VAR_ad_admin_pw'),
+                    string(credentialsId: 'dami-tf-db-admin-user', variable: 'TF_VAR_db_admin_user'),
+                    string(credentialsId: 'dami-tf-db-admin-pw',   variable: 'TF_VAR_db_admin_pw')
                 ]) {
                     dir(env.TF_DIR) {
                         sh 'terraform output'
                         script {
                             if (env.ALB_DNS) {
+                                echo "========================================="
+                                echo "FME Flow URL: http://${env.ALB_DNS}/fmeserver"
+                                echo "Allow 5-10 minutes for EC2 user data to"
+                                echo "configure FME Flow on first boot."
+                                echo "========================================="
                                 writeFile file: 'deploy-output.env', text: """ENVIRONMENT=${params.ENVIRONMENT}
 ALB_DNS=${env.ALB_DNS}
 FME_FLOW_URL=http://${env.ALB_DNS}/fmeserver
 CORE_AMI_ID=${params.CORE_AMI_ID}
 ENGINE_AMI_ID=${params.ENGINE_AMI_ID}
+BUILD_NUMBER=${env.BUILD_NUMBER}
 """
+                                archiveArtifacts artifacts: 'deploy-output.env', fingerprint: true
                             }
                         }
-                        archiveArtifacts artifacts: 'deploy-output.env', allowEmptyArchive: true
                     }
                 }
             }
@@ -230,10 +283,10 @@ ENGINE_AMI_ID=${params.ENGINE_AMI_ID}
             }
         }
         success {
-            echo "Terraform ${params.ACTION} completed for [${params.ENVIRONMENT}]"
+            echo "Build 2 complete: Terraform ${params.ACTION} succeeded for [${params.ENVIRONMENT}]"
         }
         failure {
-            echo "Terraform ${params.ACTION} FAILED for [${params.ENVIRONMENT}]. Check logs above."
+            echo "Build 2 FAILED: Terraform ${params.ACTION} failed for [${params.ENVIRONMENT}]. Check the logs above."
         }
     }
 }

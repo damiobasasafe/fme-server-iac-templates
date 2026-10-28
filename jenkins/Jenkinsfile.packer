@@ -1,5 +1,16 @@
-// Dami - FME Flow Packer AMI Build Pipeline
-// Builds FME Core and Engine AMIs (Windows Server 2022) using Packer
+// =============================================================================
+// Build 1: FME Flow AMI Builder
+// =============================================================================
+// Bakes two Windows Server 2022 AMIs using Packer:
+//   - Core AMI    : FME Flow installed with /ROLE=Core (the main application server)
+//   - Engine AMI  : FME Flow installed with /ROLE=Engine (the processing workers)
+//
+// Both AMIs have FME Flow pre-installed with all services disabled at bake time.
+// Services are configured and started on first instance boot via EC2 user data.
+//
+// Output: Two AMI IDs published as a Jenkins artifact (ami-ids.env) and passed
+//         directly to Build 2 (Terraform) when run as part of the full pipeline.
+// =============================================================================
 
 pipeline {
     agent any
@@ -8,17 +19,22 @@ pipeline {
         string(
             name: 'FME_INSTALLER_URL',
             defaultValue: 'https://downloads.safe.com/fme/2026/win64/fme-flow-2026.3.1-b26656-win-x64.exe',
-            description: 'URL to the FME Flow Windows installer (.exe). Required.'
+            description: 'Direct download URL to the FME Flow Windows installer (.exe). Must be publicly accessible from the Packer build instance.'
         )
         string(
             name: 'AWS_REGION',
             defaultValue: 'us-east-1',
-            description: 'AWS region to build and publish AMIs in'
+            description: 'AWS region where AMIs will be built and stored.'
         )
         string(
             name: 'FME_VERSION',
             defaultValue: '2026.3',
-            description: 'FME Flow version being built (used for tagging)'
+            description: 'FME Flow version label used for AMI tagging (e.g. 2026.3). Does not affect which installer is downloaded.'
+        )
+        string(
+            name: 'ENVIRONMENT',
+            defaultValue: 'cicd-deploy',
+            description: 'Environment name used for AMI tagging (e.g. cicd-deploy, dev, prod).'
         )
     }
 
@@ -26,23 +42,35 @@ pipeline {
         PACKER_DIR      = 'AWS/packer'
         PACKER_TEMPLATE = 'fme_flow_aws_windows.pkr.hcl'
         PACKER_LOG      = '1'
-        PACKER_LOG_PATH = 'packer-build.log'
     }
 
     stages {
-        stage('Validate') {
+
+        stage('Preflight Checks') {
+            // Verify all required tools and AWS access are available before
+            // starting a build that takes 20+ minutes to run.
             steps {
                 script {
-                    if (!params.FME_INSTALLER_URL) {
-                        error('FME_INSTALLER_URL is required')
+                    if (!params.FME_INSTALLER_URL?.trim()) {
+                        error 'FME_INSTALLER_URL is required. Provide the direct download URL to the FME Flow Windows installer.'
                     }
                 }
-                sh 'packer version'
-                sh 'aws sts get-caller-identity'
+                sh '''
+                    echo "=== Tool versions ==="
+                    packer version
+                    aws --version
+                    echo "=== AWS identity ==="
+                    aws sts get-caller-identity
+                    echo "=== Packer VPC/Subnet config ==="
+                    echo "VPC:    $DAMI_PACKER_VPC_ID"
+                    echo "Subnet: $DAMI_PACKER_SUBNET_ID"
+                '''
             }
         }
 
-        stage('Packer Init') {
+        stage('Initialise Packer') {
+            // Downloads the required Packer plugins (amazon provider).
+            // Safe to run every time — plugins are cached after first download.
             steps {
                 dir(env.PACKER_DIR) {
                     sh "packer init ${env.PACKER_TEMPLATE}"
@@ -51,59 +79,72 @@ pipeline {
         }
 
         stage('Build AMIs') {
+            // Builds Core and Engine AMIs in parallel to save time.
+            // Each build launches a temporary EC2 instance, installs FME Flow
+            // silently, resets EC2Launch so user data runs on first instance boot,
+            // then snapshots the instance into an AMI.
+            //
+            // Total build time: ~25-35 minutes per AMI (running in parallel).
             parallel {
-                stage('Build Core AMI') {
+
+                stage('Build 1a: Core AMI') {
+                    // Core AMI: FME Flow installed with /ROLE=Core
+                    // This is the AMI used by the Core Auto Scaling Group.
+                    // The Core node runs the FME Flow web application, database
+                    // connection, job queue, and engine coordination.
                     steps {
                         dir(env.PACKER_DIR) {
                             sh """
                                 set -o pipefail
-                                packer build \
-                                    -only='dami-fme-core-windows.amazon-ebs.fme_core_windows' \
-                                    -var 'region=${params.AWS_REGION}' \
-                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \
-                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \
-                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \
-                                    -var 'tags={"Name":"dami-fme-core-windows-${params.FME_VERSION}","Version":"${params.FME_VERSION}","ManagedBy":"Dami-CICD","OS":"Windows-Server-2022"}' \
-                                    ${env.PACKER_TEMPLATE} | tee packer-core.log
+                                packer build \\
+                                    -only='dami-fme-core-windows.amazon-ebs.fme_core_windows' \\
+                                    -var 'region=${params.AWS_REGION}' \\
+                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \\
+                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \\
+                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \\
+                                    -var 'tags={"Name":"cicd-deploy-fme-core-${params.FME_VERSION}","Version":"${params.FME_VERSION}","Environment":"${params.ENVIRONMENT}","Role":"Core","ManagedBy":"Jenkins-Packer","OS":"Windows-Server-2022"}' \\
+                                    ${env.PACKER_TEMPLATE} 2>&1 | tee packer-core.log
                             """
                             script {
                                 def log = readFile('packer-core.log')
-                                def amiMatch = log =~ /ami-[a-z0-9]{17}/
-                                def amiList = amiMatch.collect { it }
-                                if (amiList) {
-                                    env.CORE_AMI_ID = amiList[amiList.size() - 1]
+                                def match = (log =~ /ami-[a-z0-9]{17}/).collect { it }
+                                if (match) {
+                                    env.CORE_AMI_ID = match.last()
                                     echo "Core AMI ID: ${env.CORE_AMI_ID}"
                                 } else {
-                                    error('Failed to extract Core AMI ID from Packer output')
+                                    error 'Could not extract Core AMI ID from Packer output. Check packer-core.log.'
                                 }
                             }
                         }
                     }
                 }
 
-                stage('Build Engine AMI') {
+                stage('Build 1b: Engine AMI') {
+                    // Engine AMI: FME Flow installed with /ROLE=Engine
+                    // This AMI is used by both the Standard Engine and Dynamic
+                    // (CPU-based) Engine Auto Scaling Groups. Engines connect to
+                    // the Core node via the NLB on port 7070 to receive jobs.
                     steps {
                         dir(env.PACKER_DIR) {
                             sh """
                                 set -o pipefail
-                                packer build \
-                                    -only='dami-fme-engine-windows.amazon-ebs.fme_engine_windows' \
-                                    -var 'region=${params.AWS_REGION}' \
-                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \
-                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \
-                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \
-                                    -var 'tags={"Name":"dami-fme-engine-windows-${params.FME_VERSION}","Version":"${params.FME_VERSION}","ManagedBy":"Dami-CICD","OS":"Windows-Server-2022"}' \
-                                    ${env.PACKER_TEMPLATE} | tee packer-engine.log
+                                packer build \\
+                                    -only='dami-fme-engine-windows.amazon-ebs.fme_engine_windows' \\
+                                    -var 'region=${params.AWS_REGION}' \\
+                                    -var 'installer_url=${params.FME_INSTALLER_URL}' \\
+                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \\
+                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \\
+                                    -var 'tags={"Name":"cicd-deploy-fme-engine-${params.FME_VERSION}","Version":"${params.FME_VERSION}","Environment":"${params.ENVIRONMENT}","Role":"Engine","ManagedBy":"Jenkins-Packer","OS":"Windows-Server-2022"}' \\
+                                    ${env.PACKER_TEMPLATE} 2>&1 | tee packer-engine.log
                             """
                             script {
                                 def log = readFile('packer-engine.log')
-                                def amiMatch = log =~ /ami-[a-z0-9]{17}/
-                                def amiList = amiMatch.collect { it }
-                                if (amiList) {
-                                    env.ENGINE_AMI_ID = amiList[amiList.size() - 1]
+                                def match = (log =~ /ami-[a-z0-9]{17}/).collect { it }
+                                if (match) {
+                                    env.ENGINE_AMI_ID = match.last()
                                     echo "Engine AMI ID: ${env.ENGINE_AMI_ID}"
                                 } else {
-                                    error('Failed to extract Engine AMI ID from Packer output')
+                                    error 'Could not extract Engine AMI ID from Packer output. Check packer-engine.log.'
                                 }
                             }
                         }
@@ -113,15 +154,24 @@ pipeline {
         }
 
         stage('Publish AMI IDs') {
+            // Writes the two AMI IDs to a file that Build 2 (Terraform) can
+            // consume. Archive it as a Jenkins artifact so it is always
+            // retrievable even if the workspace is cleaned between builds.
             steps {
                 script {
-                    echo "Core AMI:   ${env.CORE_AMI_ID}"
-                    echo "Engine AMI: ${env.ENGINE_AMI_ID}"
+                    echo "=== AMI Build Summary ==="
+                    echo "Core AMI ID:   ${env.CORE_AMI_ID}"
+                    echo "Engine AMI ID: ${env.ENGINE_AMI_ID}"
+                    echo "FME Version:   ${params.FME_VERSION}"
+                    echo "Region:        ${params.AWS_REGION}"
+                    echo "Environment:   ${params.ENVIRONMENT}"
 
                     writeFile file: 'ami-ids.env', text: """CORE_AMI_ID=${env.CORE_AMI_ID}
 ENGINE_AMI_ID=${env.ENGINE_AMI_ID}
 FME_VERSION=${params.FME_VERSION}
 AWS_REGION=${params.AWS_REGION}
+ENVIRONMENT=${params.ENVIRONMENT}
+BUILD_NUMBER=${env.BUILD_NUMBER}
 """
                 }
                 archiveArtifacts artifacts: 'ami-ids.env', fingerprint: true
@@ -131,12 +181,14 @@ AWS_REGION=${params.AWS_REGION}
     }
 
     post {
-        failure {
-            echo 'Packer build failed. Check packer-*.log for details.'
-            archiveArtifacts artifacts: 'AWS/packer/packer-*.log', allowEmptyArchive: true
-        }
         success {
-            echo "AMI build complete. Core: ${env.CORE_AMI_ID} | Engine: ${env.ENGINE_AMI_ID}"
+            echo "Build 1 complete. Proceed to Build 2 (Terraform) with:"
+            echo "  CORE_AMI_ID   = ${env.CORE_AMI_ID}"
+            echo "  ENGINE_AMI_ID = ${env.ENGINE_AMI_ID}"
+        }
+        failure {
+            echo 'Build 1 FAILED. Check the packer-*.log artifacts for details.'
+            archiveArtifacts artifacts: 'AWS/packer/packer-*.log', allowEmptyArchive: true
         }
     }
 }

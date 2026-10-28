@@ -72,45 +72,89 @@ $fmeDir = $fmeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 
 if (-not $fmeDir) { throw "FME Flow installation directory not found" }
 Log "FME Flow directory: $fmeDir"
 
-# ── Write FME Flow configuration ───────────────────────────────────────────────
-# FME Flow 2024+ uses a YAML values override file
-$configDir  = Join-Path $fmeDir "fmeflowconfig"
-if (-not (Test-Path $configDir)) { New-Item -ItemType Directory -Path $configDir -Force | Out-Null }
-
-$valuesFile = Join-Path $configDir "values-modified.yml"
-$config = @"
-database:
-  host: $databasehostname
-  port: 5432
-  username: $databaseUsername
-  password: $databasePassword
-
-externalHostname: $externalhostname
-
-repository:
-  path: $($repoPath -replace '\\','/')
-"@
-
-Log "Writing config to $valuesFile"
-$config | Set-Content -Path $valuesFile -Encoding UTF8
-Log "Config written."
-
-# ── Enable and start FME Flow service ─────────────────────────────────────────
-$serviceNames = @("FMEServer", "FMEFlow", "fmeserver", "fmeflow")
-$fmeSvc = $null
-foreach ($name in $serviceNames) {
-    $s = Get-Service -Name $name -ErrorAction SilentlyContinue
-    if ($s) { $fmeSvc = $s; break }
+# ── Update FME Flow database config to point at RDS ───────────────────────────
+# FME Flow stores its DB connection in fmeDatabaseConfig.txt under the Server dir.
+# The default install points at localhost:7082 (embedded PG). We replace that
+# with the RDS endpoint so FME Flow uses the shared persistent database.
+$dbConfigPath = Join-Path $fmeDir "Server\fmeDatabaseConfig.txt"
+if (Test-Path $dbConfigPath) {
+    Log "Updating database config: $dbConfigPath"
+    $dbConfig = Get-Content $dbConfigPath -Raw
+    $dbConfig = $dbConfig -replace 'DB_JDBC_URL=jdbc:postgresql://[^\r\n]+', "DB_JDBC_URL=jdbc:postgresql://${databasehostname}:5432/fmeflow"
+    $dbConfig = $dbConfig -replace 'DB_USERNAME=[^\r\n]+',                   "DB_USERNAME=$databaseUsername"
+    $dbConfig = $dbConfig -replace 'DB_PASSWORD=[^\r\n]+',                   "DB_PASSWORD=$databasePassword"
+    Set-Content -Path $dbConfigPath -Value $dbConfig -Encoding UTF8
+    Log "Database config updated to RDS endpoint: $databasehostname"
+} else {
+    Log "WARNING: fmeDatabaseConfig.txt not found at $dbConfigPath — skipping DB config update"
 }
 
-if ($fmeSvc) {
-    Log "Enabling and starting service: $($fmeSvc.Name)"
-    Set-Service -Name $fmeSvc.Name -StartupType Automatic
-    Start-Service -Name $fmeSvc.Name
-    Log "Service started."
+# ── Update external hostname in FME Flow web config ───────────────────────────
+$webConfigPath = Join-Path $fmeDir "Server\fmeFlowWebApplicationConfig.txt"
+if (Test-Path $webConfigPath) {
+    Log "Updating web application config: $webConfigPath"
+    $webConfig = Get-Content $webConfigPath -Raw
+    $webConfig = $webConfig -replace 'EXTERNALHOSTNAME=[^\r\n]*', "EXTERNALHOSTNAME=$externalhostname"
+    Set-Content -Path $webConfigPath -Value $webConfig -Encoding UTF8
+    Log "External hostname set to: $externalhostname"
+}
+
+# ── Open Windows Firewall ports for FME Flow and ALB health checks ─────────────
+Log "Opening Windows Firewall ports for FME Flow..."
+$fwRules = @(
+    @{ Name = "FME Flow HTTP";      Port = 80   },
+    @{ Name = "FME Flow WebSocket"; Port = 7078 },
+    @{ Name = "FME Flow Engine Reg";Port = 7070 },
+    @{ Name = "FME Flow Engine HC"; Port = 7082 }
+)
+foreach ($rule in $fwRules) {
+    New-NetFirewallRule -DisplayName $rule.Name -Direction Inbound -Protocol TCP `
+        -LocalPort $rule.Port -Action Allow -ErrorAction SilentlyContinue | Out-Null
+    Log "Firewall: opened port $($rule.Port) ($($rule.Name))"
+}
+
+# ── Enable and start FME Flow services ────────────────────────────────────────
+Log "Enabling and starting FME Flow services..."
+$serviceOrder = @("FME Flow Database", "FME Flow Core", "FMEFlowAppServer", "FME Flow Engines")
+foreach ($svcName in $serviceOrder) {
+    $s = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+    if ($s) {
+        Log "Starting service: $($s.Name)"
+        Set-Service  -Name $s.Name -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service -Name $s.Name -ErrorAction SilentlyContinue
+    }
+}
+
+# Verify services are running
+Start-Sleep -Seconds 15
+Log "Service status after start:"
+Get-Service | Where-Object { $_.Name -like "*fme*" } | ForEach-Object {
+    Log "  $($_.Name) -> $($_.Status)"
+}
+
+# ── Verify FME Flow health endpoint is responding ──────────────────────────────
+Log "Waiting for FME Flow to become healthy..."
+$maxAttempts = 20
+$attempt = 0
+$healthy = $false
+while ($attempt -lt $maxAttempts -and -not $healthy) {
+    $attempt++
+    try {
+        $r = Invoke-WebRequest -Uri "http://localhost/fmeapiv4/healthcheck/liveness" -UseBasicParsing -TimeoutSec 10
+        if ($r.StatusCode -eq 200) {
+            $healthy = $true
+            Log "FME Flow is healthy (attempt $attempt)"
+        }
+    } catch {
+        Log "Attempt $attempt: not ready yet - $($_.Exception.Message)"
+        Start-Sleep -Seconds 15
+    }
+}
+
+if (-not $healthy) {
+    Log "WARNING: FME Flow did not become healthy within expected time. Check service logs."
 } else {
-    Log "WARNING: No FME Flow service found. Services available:"
-    Get-Service | Where-Object { $_.Name -like "*fme*" } | ForEach-Object { Log "  $($_.Name)" }
+    Log "FME Flow is up and responding."
 }
 
 Log "=== FME Flow Core Configuration Complete ==="
