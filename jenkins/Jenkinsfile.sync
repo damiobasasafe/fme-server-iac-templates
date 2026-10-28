@@ -143,7 +143,7 @@ Check that the FME Flow instance is running and the ALB is healthy."""
                     echo "Validating source token (dami-fmeflow-${params.SOURCE_ENV}-token)..."
                     withCredentials([string(credentialsId: "dami-fmeflow-${params.SOURCE_ENV}-token", variable: 'FME_TOKEN')]) {
                         def code = sh(
-                            script: "curl -s --max-time 15 -H 'Authorization: fmetoken token=\$FME_TOKEN' '${sourceUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
+                            script: "curl -s --max-time 15 -H \"Authorization: fmetoken token=\$FME_TOKEN\" '${sourceUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
                             returnStdout: true
                         ).trim()
                         checkTokenResponse(code, params.SOURCE_ENV, 'source')
@@ -152,7 +152,7 @@ Check that the FME Flow instance is running and the ALB is healthy."""
                     echo "Validating target token (dami-fmeflow-${params.TARGET_ENV}-token)..."
                     withCredentials([string(credentialsId: "dami-fmeflow-${params.TARGET_ENV}-token", variable: 'FME_TOKEN')]) {
                         def code = sh(
-                            script: "curl -s --max-time 15 -H 'Authorization: fmetoken token=\$FME_TOKEN' '${targetUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
+                            script: "curl -s --max-time 15 -H \"Authorization: fmetoken token=\$FME_TOKEN\" '${targetUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
                             returnStdout: true
                         ).trim()
                         checkTokenResponse(code, params.TARGET_ENV, 'target')
