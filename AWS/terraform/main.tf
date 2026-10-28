@@ -121,7 +121,7 @@ module "asg_standard_engine" {
   private_sn_az1_id    = module.network.private_sn_az1_id
   engine_type          = "STANDARD"
   node_managed         = "true"
-  engine_name          = "standard"
+  engine_name          = "${var.owner}-standard"
   owner                = var.owner
   depends_on = [
     module.asg_core
@@ -142,7 +142,7 @@ module "asg_cpuusage_engine" {
   private_sn_az1_id    = module.network.private_sn_az1_id
   engine_type          = "DYNAMIC"
   node_managed         = "false"
-  engine_name          = "cpuUsage"
+  engine_name          = "${var.owner}-cpuUsage"
   owner                = var.owner
   depends_on = [
     module.asg_core

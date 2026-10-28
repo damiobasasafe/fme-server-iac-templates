@@ -10,7 +10,7 @@ locals {
 }
 
 resource "aws_launch_template" "fme_flow_core" {
-  name                   = "fme-core"
+  name                   = "${var.owner}-fme-core"
   image_id               = var.fme_core_image_id
   instance_type          = "t3.large"
   vpc_security_group_ids = [var.sg_id]
