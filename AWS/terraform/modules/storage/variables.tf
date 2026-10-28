@@ -28,3 +28,8 @@ variable "sg_id" {
   type        = string
   description = "Security group id for FME Flow deployment"
 }
+
+variable "owner" {
+  type        = string
+  description = "Environment owner prefix used to namespace resource names (e.g. dami-cicd-dev)."
+}

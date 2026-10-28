@@ -7,7 +7,7 @@ resource "aws_lb" "fme_flow_alb" {
 }
 
 resource "aws_lb_target_group" "fme_flow_core" {
-  name     = "fmeflow-core"
+  name     = "${var.owner}-fmeflow-core"
   port     = 80
   protocol = "HTTP"
   vpc_id   = var.vpc_id
@@ -21,7 +21,7 @@ resource "aws_lb_target_group" "fme_flow_core" {
 }
 
 resource "aws_lb_target_group" "fme_flow_ws" {
-  name     = "fmeflow-ws"
+  name     = "${var.owner}-fmeflow-ws"
   port     = 7078
   protocol = "HTTP"
   vpc_id   = var.vpc_id

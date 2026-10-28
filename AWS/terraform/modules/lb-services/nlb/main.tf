@@ -6,7 +6,7 @@ resource "aws_lb" "fme_flow_nlb" {
 }
 
 resource "aws_lb_target_group" "fme_flow_engine-registration" {
-  name     = "engine-registration"
+  name     = "${var.owner}-eng-reg"
   port     = 7070
   protocol = "TCP"
   vpc_id   = var.vpc_id

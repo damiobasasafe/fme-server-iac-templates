@@ -17,3 +17,8 @@ variable "private_sn_az1_id" {
   type        = string
   description = "Private subnet id in the first availability zone"
 }
+
+variable "owner" {
+  type        = string
+  description = "Environment owner prefix used to namespace resource names (e.g. dami-cicd-dev)."
+}

@@ -28,7 +28,7 @@ locals {
 }
 
 resource "aws_ssm_document" "fme_flow_ad" {
-  name            = "fmeflowDomainConfig"
+  name            = "${var.owner}-fmeflowDomainConfig"
   document_format = "JSON"
   document_type   = "Command"
 

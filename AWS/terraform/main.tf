@@ -34,6 +34,7 @@ module "network" {
 
 module "storage" {
   source            = "./modules/storage/"
+  owner             = var.owner
   ad_name           = var.ad_name
   ad_admin_pw       = var.ad_admin_pw
   vpc_id            = module.network.vpc_id
@@ -52,6 +53,7 @@ module "database" {
 
 module "alb" {
   source           = "./modules/lb-services/alb/"
+  owner            = var.owner
   alb_name         = var.alb_name
   sg_id            = module.network.sg_id
   vpc_id           = module.network.vpc_id
@@ -61,6 +63,7 @@ module "alb" {
 
 module "nlb" {
   source            = "./modules/lb-services/nlb/"
+  owner             = var.owner
   nlb_name          = var.nlb_name
   vpc_id            = module.network.vpc_id
   private_sn_az2_id = module.network.private_sn_az2_id
