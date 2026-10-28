@@ -81,7 +81,7 @@ pipeline {
             steps {
                 script {
                     def packerJob = build(
-                        job: 'dami-fmeflow-packer',
+                        job: 'fmeflow-ami-builder',
                         parameters: [
                             string(name: 'FME_INSTALLER_URL', value: params.FME_INSTALLER_URL),
                             string(name: 'AWS_REGION',         value: env.AWS_REGION),
@@ -94,7 +94,7 @@ pipeline {
 
                     // Copy AMI ID artifact from Packer job
                     copyArtifacts(
-                        projectName: 'dami-fmeflow-packer',
+                        projectName: 'fmeflow-ami-builder',
                         selector: specific("${packerJob.number}"),
                         filter: 'ami-ids.env'
                     )
@@ -128,7 +128,7 @@ pipeline {
         stage('Terraform Plan') {
             steps {
                 build(
-                    job: 'dami-fmeflow-terraform',
+                    job: 'fmeflow-infra-provisioner',
                     parameters: [
                         choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
                         choice(name: 'ACTION',        value: 'plan'),
@@ -156,7 +156,7 @@ pipeline {
         stage('Terraform Apply') {
             steps {
                 build(
-                    job: 'dami-fmeflow-terraform',
+                    job: 'fmeflow-infra-provisioner',
                     parameters: [
                         choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
                         choice(name: 'ACTION',        value: 'apply'),
