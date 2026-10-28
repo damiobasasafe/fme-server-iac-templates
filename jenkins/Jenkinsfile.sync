@@ -150,6 +150,8 @@ pipeline {
                         if (params.PROJECT_ID?.trim()) {
                             echo "Direct project lookup by ID:"
                             sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects/${params.PROJECT_ID}" | python3 -m json.tool 2>/dev/null || true"""
+                            echo "Raw download attempt via API (captures 500 error body):"
+                            sh """curl -v -H "Authorization: fmetoken token=\$FME_TOKEN" -o /tmp/project-download-test.bin -w "HTTP_STATUS:%{http_code}" "${sourceUrl}/fmeapiv4/projects/${params.PROJECT_ID}/package" 2>&1 || true"""
                         }
                         echo "=== End diagnostics ==="
 
