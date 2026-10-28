@@ -121,7 +121,7 @@ pipeline {
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
                         echo "Connecting to source: ${params.SOURCE_ENV} (${sourceUrl})"
-                        sh "${env.FME_CLI} login --url ${sourceUrl} --token \$FME_TOKEN"
+                        sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --project-name '${params.PROJECT_NAME}' --output '${env.EXPORT_FILE}'"
@@ -149,7 +149,7 @@ pipeline {
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
                         echo "Connecting to target: ${params.TARGET_ENV} (${targetUrl})"
-                        sh "${env.FME_CLI} login --url ${targetUrl} --token \$FME_TOKEN"
+                        sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
 
                         echo "Importing project '${params.PROJECT_NAME}' into ${params.TARGET_ENV}..."
                         sh "${env.FME_CLI} projects upload --file '${env.EXPORT_FILE}' ${overwrite}"
@@ -170,7 +170,7 @@ pipeline {
                     def credId    = "dami-fmeflow-${params.TARGET_ENV}-token"
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
-                        sh "${env.FME_CLI} login --url ${targetUrl} --token \$FME_TOKEN"
+                        sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
                         def result = sh(
                             script: "${env.FME_CLI} projects list | grep -i '${params.PROJECT_NAME}' || echo NOT_FOUND",
                             returnStdout: true
