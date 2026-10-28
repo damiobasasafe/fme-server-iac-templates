@@ -124,7 +124,7 @@ pipeline {
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
                         echo "Available projects in ${params.SOURCE_ENV}:"
-                        sh "${env.FME_CLI} projects list"
+                        sh "${env.FME_CLI} projects || true"
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
@@ -175,7 +175,7 @@ pipeline {
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
                         def result = sh(
-                            script: "${env.FME_CLI} projects list | grep -i '${params.PROJECT_NAME}' || echo NOT_FOUND",
+                            script: "${env.FME_CLI} projects | grep -i '${params.PROJECT_NAME}' || echo NOT_FOUND",
                             returnStdout: true
                         ).trim()
                         if (result.contains('NOT_FOUND')) {
