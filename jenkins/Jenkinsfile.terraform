@@ -236,6 +236,7 @@ pipeline {
                             sh """
                                 terraform destroy \\
                                     -var-file='envs/${params.ENVIRONMENT}.tfvars' \\
+                                    -var 'region=${params.AWS_REGION}' \\
                                     ${amiVars} \\
                                     -auto-approve
                             """
