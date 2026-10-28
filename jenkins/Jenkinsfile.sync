@@ -17,13 +17,14 @@
 //   5. Verifies the project appears in the target before finishing
 //
 // Required Jenkins credentials (one per environment):
-//   dami-fmeflow-dev-token     - FME Flow API token for dev
-//   dami-fmeflow-staging-token - FME Flow API token for staging
-//   dami-fmeflow-prod-token    - FME Flow API token for prod
+//   dami-fmeflow-dev-token         - FME Flow API token for dev
+//   dami-fmeflow-staging-token     - FME Flow API token for staging
+//   dami-fmeflow-prod-token        - FME Flow API token for prod
 //   dami-fmeflow-cicd-deploy-token - FME Flow API token for cicd-deploy
 //
 // How to generate an API token:
 //   FME Flow UI → username (top right) → User Settings → Manage Tokens → Generate
+//   The token must be generated while logged in as the user who OWNS the project.
 // =============================================================================
 
 pipeline {
@@ -44,6 +45,11 @@ pipeline {
             name: 'PROJECT_NAME',
             defaultValue: '',
             description: 'Exact name of the FME Flow project to promote. Must match the project name in the source environment.'
+        )
+        string(
+            name: 'PROJECT_ID',
+            defaultValue: '',
+            description: 'Optional: FME Flow project UUID from the project page URL (e.g. 6e7efb15-083d-4302-a204-6bcedf22b070). Used as fallback if name-based export fails.'
         )
         booleanParam(
             name: 'OVERWRITE',
@@ -81,7 +87,10 @@ pipeline {
                         input message: "You are promoting '${params.PROJECT_NAME}' to PRODUCTION from ${params.SOURCE_ENV}. Review the project in ${params.SOURCE_ENV} before continuing.",
                               ok: 'Confirm promotion to prod'
                     }
-                    echo "Promoting: '${params.PROJECT_NAME}' from ${params.SOURCE_ENV} → ${params.TARGET_ENV}"
+                    echo "Promoting: '${params.PROJECT_NAME}' from ${params.SOURCE_ENV} to ${params.TARGET_ENV}"
+                    if (params.PROJECT_ID?.trim()) {
+                        echo "Project ID provided: ${params.PROJECT_ID} (will be used as fallback if name-based export fails)"
+                    }
                 }
             }
         }
@@ -105,6 +114,12 @@ pipeline {
                     } else {
                         echo "FME Flow CLI already installed: ${installed}"
                     }
+                    // Print upload command help now so any flag errors are visible
+                    // before we reach the Import stage.
+                    echo "=== fmeflow projects upload help ==="
+                    sh 'fmeflow projects upload --help 2>&1 || true'
+                    echo "=== fmeflow projects download help ==="
+                    sh 'fmeflow projects download --help 2>&1 || true'
                 }
             }
         }
@@ -114,6 +129,11 @@ pipeline {
             // the project as an .fsproject file. The .fsproject bundles all
             // project contents: workspaces, automations, schedules, and
             // connection definitions (passwords are excluded for security).
+            //
+            // Download strategy:
+            //   1. Try by PROJECT_NAME (standard path)
+            //   2. If name fails and PROJECT_ID is provided, fall back to ID
+            //   3. If both fail, print diagnostics and error out clearly
             steps {
                 script {
                     def sourceUrl = getEnvUrl(params.SOURCE_ENV)
@@ -123,11 +143,41 @@ pipeline {
                         echo "Connecting to source: ${params.SOURCE_ENV} (${sourceUrl})"
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
-                        echo "Projects owned by admin:"
-                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects?owner=admin" || true"""
+                        // Diagnostics — these never block the pipeline (|| true)
+                        echo "=== Diagnostics: what projects does this token see? ==="
+                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects" | python3 -m json.tool 2>/dev/null || true"""
+                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects?owner=admin" | python3 -m json.tool 2>/dev/null || true"""
+                        if (params.PROJECT_ID?.trim()) {
+                            echo "Direct project lookup by ID:"
+                            sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects/${params.PROJECT_ID}" | python3 -m json.tool 2>/dev/null || true"""
+                        }
+                        echo "=== End diagnostics ==="
 
-                        echo "Exporting project: '${params.PROJECT_NAME}'"
-                        sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
+                        // Attempt 1: download by name
+                        echo "Attempt 1: downloading project by name '${params.PROJECT_NAME}'..."
+                        def byName = sh(
+                            script: "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}' 2>&1 && echo __SUCCESS__ || echo __FAILED__",
+                            returnStdout: true
+                        ).trim()
+                        echo byName
+
+                        if (!byName.contains('__SUCCESS__')) {
+                            // Attempt 2: download by ID if provided
+                            if (params.PROJECT_ID?.trim()) {
+                                echo "Attempt 2: name-based download failed. Trying by project ID '${params.PROJECT_ID}'..."
+                                sh "${env.FME_CLI} projects download --id '${params.PROJECT_ID}' -f '${env.EXPORT_FILE}'"
+                            } else {
+                                error """Export failed: project '${params.PROJECT_NAME}' not found by name and no PROJECT_ID was provided.
+Possible causes:
+  1. The token in Jenkins (dami-fmeflow-${params.SOURCE_ENV}-token) belongs to a FME Flow user who does not own this project.
+     Fix: log into FME Flow as the project owner, generate a new token, and update the Jenkins credential.
+  2. The project name has different casing or spacing.
+     Fix: copy the exact project name from FME Flow UI -> Projects.
+  3. The token has expired.
+     Fix: generate a new no-expiry token and update the Jenkins credential.
+To bypass: paste the project UUID from the FME Flow project page URL into the PROJECT_ID parameter."""
+                            }
+                        }
 
                         def size = sh(script: "du -sh '${env.EXPORT_FILE}' | cut -f1", returnStdout: true).trim()
                         echo "Export complete. File: ${env.EXPORT_FILE} (${size})"
@@ -164,9 +214,8 @@ pipeline {
 
         stage('Verify Promotion') {
             // Confirms the project is visible in the target environment after
-            // import. Fails the build if the project cannot be found so you
-            // know immediately if something went wrong rather than discovering
-            // it during a demo or a production job run.
+            // import. Uses the CLI name filter to look up the project directly
+            // rather than grepping a table, which is more reliable.
             steps {
                 script {
                     def targetUrl = getEnvUrl(params.TARGET_ENV)
@@ -174,11 +223,24 @@ pipeline {
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
+
+                        // Use --name flag to look up the project directly
                         def result = sh(
-                            script: "${env.FME_CLI} projects | grep -i '${params.PROJECT_NAME}' || echo NOT_FOUND",
+                            script: "${env.FME_CLI} projects --name '${params.PROJECT_NAME}' --json 2>&1 || echo NOT_FOUND",
                             returnStdout: true
                         ).trim()
-                        if (result.contains('NOT_FOUND')) {
+                        echo "Verify result: ${result}"
+
+                        // Also try by ID if provided
+                        if (params.PROJECT_ID?.trim()) {
+                            def byId = sh(
+                                script: "${env.FME_CLI} projects --id '${params.PROJECT_ID}' --json 2>&1 || echo NOT_FOUND",
+                                returnStdout: true
+                            ).trim()
+                            echo "Verify by ID: ${byId}"
+                        }
+
+                        if (result.contains('NOT_FOUND') || result.contains('"items":[]') || result.contains('"totalCount":0')) {
                             error "Verification failed: '${params.PROJECT_NAME}' not found in ${params.TARGET_ENV} after import."
                         }
                         echo "Verified: '${params.PROJECT_NAME}' is present in ${params.TARGET_ENV}."
