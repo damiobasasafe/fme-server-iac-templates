@@ -36,6 +36,16 @@ pipeline {
             defaultValue: 'cicd-deploy',
             description: 'Environment name used for AMI tagging (e.g. cicd-deploy, dev, prod).'
         )
+        string(
+            name: 'VPC_ID',
+            defaultValue: '',
+            description: 'VPC ID for Packer build instances in the target region. Leave blank to use the DAMI_PACKER_VPC_ID Jenkins global variable (default us-east-1 VPC).'
+        )
+        string(
+            name: 'SUBNET_ID',
+            defaultValue: '',
+            description: 'Public subnet ID for Packer build instances. Must have internet access so the installer can be downloaded. Leave blank to use the DAMI_PACKER_SUBNET_ID Jenkins global variable.'
+        )
     }
 
     environment {
@@ -54,6 +64,11 @@ pipeline {
                     if (!params.FME_INSTALLER_URL?.trim()) {
                         error 'FME_INSTALLER_URL is required. Provide the direct download URL to the FME Flow Windows installer.'
                     }
+                    env.RESOLVED_VPC_ID    = params.VPC_ID?.trim()    ? params.VPC_ID    : env.DAMI_PACKER_VPC_ID
+                    env.RESOLVED_SUBNET_ID = params.SUBNET_ID?.trim() ? params.SUBNET_ID : env.DAMI_PACKER_SUBNET_ID
+                    if (!env.RESOLVED_VPC_ID?.trim() || !env.RESOLVED_SUBNET_ID?.trim()) {
+                        error 'VPC_ID and SUBNET_ID are required. Provide them as parameters or set DAMI_PACKER_VPC_ID and DAMI_PACKER_SUBNET_ID in Jenkins global environment variables.'
+                    }
                 }
                 sh '''
                     echo "=== Tool versions ==="
@@ -61,9 +76,10 @@ pipeline {
                     aws --version
                     echo "=== AWS identity ==="
                     aws sts get-caller-identity
-                    echo "=== Packer VPC/Subnet config ==="
-                    echo "VPC:    $DAMI_PACKER_VPC_ID"
-                    echo "Subnet: $DAMI_PACKER_SUBNET_ID"
+                    echo "=== Packer build config ==="
+                    echo "Region: $AWS_REGION"
+                    echo "VPC:    $RESOLVED_VPC_ID"
+                    echo "Subnet: $RESOLVED_SUBNET_ID"
                 '''
             }
         }
@@ -100,8 +116,8 @@ pipeline {
                                     -only='dami-fme-core-windows.amazon-ebs.fme_core_windows' \\
                                     -var 'region=${params.AWS_REGION}' \\
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \\
-                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \\
-                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \\
+                                    -var 'vpc_id=${env.RESOLVED_VPC_ID}' \\
+                                    -var 'subnet_id=${env.RESOLVED_SUBNET_ID}' \\
                                     -var 'tags={"Name":"cicd-deploy-fme-core-${params.FME_VERSION}","Version":"${params.FME_VERSION}","Environment":"${params.ENVIRONMENT}","Role":"Core","ManagedBy":"Jenkins-Packer","OS":"Windows-Server-2022"}' \\
                                     ${env.PACKER_TEMPLATE} 2>&1 | tee packer-core.log
                             """
@@ -132,8 +148,8 @@ pipeline {
                                     -only='dami-fme-engine-windows.amazon-ebs.fme_engine_windows' \\
                                     -var 'region=${params.AWS_REGION}' \\
                                     -var 'installer_url=${params.FME_INSTALLER_URL}' \\
-                                    -var 'vpc_id=${env.DAMI_PACKER_VPC_ID}' \\
-                                    -var 'subnet_id=${env.DAMI_PACKER_SUBNET_ID}' \\
+                                    -var 'vpc_id=${env.RESOLVED_VPC_ID}' \\
+                                    -var 'subnet_id=${env.RESOLVED_SUBNET_ID}' \\
                                     -var 'tags={"Name":"cicd-deploy-fme-engine-${params.FME_VERSION}","Version":"${params.FME_VERSION}","Environment":"${params.ENVIRONMENT}","Role":"Engine","ManagedBy":"Jenkins-Packer","OS":"Windows-Server-2022"}' \\
                                     ${env.PACKER_TEMPLATE} 2>&1 | tee packer-engine.log
                             """

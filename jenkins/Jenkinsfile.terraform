@@ -47,12 +47,18 @@ pipeline {
             defaultValue: '',
             description: 'FME Engine AMI ID from Build 1 (Packer). Leave blank to use the value already in the tfvars file.'
         )
+        choice(
+            name: 'AWS_REGION',
+            choices: ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-2', 'ca-central-1', 'ca-west-1'],
+            description: 'AWS region to provision infrastructure in. Must match the region where the AMIs were built.'
+        )
     }
 
     environment {
-        TF_DIR           = 'AWS/terraform'
-        AWS_REGION       = 'us-east-1'
-        TF_IN_AUTOMATION = 'true'
+        TF_DIR             = 'AWS/terraform'
+        AWS_REGION         = "${params.AWS_REGION ?: 'us-east-1'}"
+        AWS_DEFAULT_REGION = "${params.AWS_REGION ?: 'us-east-1'}"
+        TF_IN_AUTOMATION   = 'true'
     }
 
     stages {
@@ -168,6 +174,7 @@ pipeline {
                             sh """
                                 terraform plan \\
                                     -var-file='envs/${params.ENVIRONMENT}.tfvars' \\
+                                    -var 'region=${params.AWS_REGION}' \\
                                     ${amiVars} \\
                                     -out=tfplan \\
                                     -detailed-exitcode || [ \$? -eq 2 ]

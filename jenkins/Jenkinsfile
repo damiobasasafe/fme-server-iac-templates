@@ -41,12 +41,27 @@ pipeline {
             defaultValue: false,
             description: 'Auto-approve Terraform apply without manual gate (not recommended for prod)'
         )
+        choice(
+            name: 'AWS_REGION',
+            choices: ['us-east-1', 'us-west-2', 'eu-west-1', 'eu-central-1', 'ap-southeast-2', 'ca-central-1', 'ca-west-1'],
+            description: 'AWS region to deploy into. Pick a region different from your existing environments to avoid affecting them.'
+        )
+        string(
+            name: 'PACKER_VPC_ID',
+            defaultValue: '',
+            description: 'VPC ID to use for Packer build instances in the target region. Must exist in the selected AWS_REGION.'
+        )
+        string(
+            name: 'PACKER_SUBNET_ID',
+            defaultValue: '',
+            description: 'Public subnet ID for Packer build instances. Must be in the selected AWS_REGION and have internet access so the FME installer can be downloaded.'
+        )
     }
 
     environment {
-        AWS_REGION        = 'us-east-1'
-        AWS_DEFAULT_REGION = 'us-east-1'
-        TF_IN_AUTOMATION  = 'true'
+        AWS_REGION         = "${params.AWS_REGION ?: 'us-east-1'}"
+        AWS_DEFAULT_REGION = "${params.AWS_REGION ?: 'us-east-1'}"
+        TF_IN_AUTOMATION   = 'true'
     }
 
     stages {
@@ -84,9 +99,11 @@ pipeline {
                         job: 'fmeflow-ami-builder',
                         parameters: [
                             string(name: 'FME_INSTALLER_URL', value: params.FME_INSTALLER_URL),
-                            string(name: 'AWS_REGION',         value: env.AWS_REGION),
+                            string(name: 'AWS_REGION',         value: params.AWS_REGION),
                             string(name: 'FME_VERSION',        value: params.FME_VERSION),
-                            string(name: 'SOURCE_AMI',         value: 'ami-0c1a9930d2846de36')
+                            string(name: 'ENVIRONMENT',        value: params.ENVIRONMENT),
+                            string(name: 'VPC_ID',             value: params.PACKER_VPC_ID),
+                            string(name: 'SUBNET_ID',          value: params.PACKER_SUBNET_ID)
                         ],
                         wait: true,
                         propagate: true
@@ -133,7 +150,8 @@ pipeline {
                         choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
                         choice(name: 'ACTION',        value: 'plan'),
                         string(name: 'CORE_AMI_ID',   value: env.CORE_AMI_ID),
-                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID)
+                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID),
+                        string(name: 'AWS_REGION',    value: params.AWS_REGION)
                     ],
                     wait: true,
                     propagate: true
@@ -161,7 +179,8 @@ pipeline {
                         choice(name: 'ENVIRONMENT',  value: params.ENVIRONMENT),
                         choice(name: 'ACTION',        value: 'apply'),
                         string(name: 'CORE_AMI_ID',   value: env.CORE_AMI_ID),
-                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID)
+                        string(name: 'ENGINE_AMI_ID', value: env.ENGINE_AMI_ID),
+                        string(name: 'AWS_REGION',    value: params.AWS_REGION)
                     ],
                     wait: true,
                     propagate: true
