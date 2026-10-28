@@ -64,7 +64,7 @@ pipeline {
 
         // FME Flow base URLs per environment — update these after each Terraform deployment
         DEV_URL         = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
-        STAGING_URL     = 'http://cicd-deploy-staging-alb.us-east-1.elb.amazonaws.com'
+        STAGING_URL     = 'http://dami-fmeflow-staging-alb-2096266007.us-east-1.elb.amazonaws.com'
         PROD_URL        = 'http://cicd-deploy-prod-alb.us-east-1.elb.amazonaws.com'
         CICD_DEPLOY_URL = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
     }
