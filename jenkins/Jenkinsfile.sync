@@ -123,6 +123,9 @@ pipeline {
                         echo "Connecting to source: ${params.SOURCE_ENV} (${sourceUrl})"
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
+                        echo "Available projects in ${params.SOURCE_ENV}:"
+                        sh "${env.FME_CLI} projects list"
+
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
 
