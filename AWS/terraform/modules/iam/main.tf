@@ -125,6 +125,23 @@ resource "aws_iam_role" "fme_flow" {
 
   }
 
+  # Allows instances to read the shared FME Flow encryption key from SSM Parameter Store.
+  # This key is written at boot (by config_fmeflow_confd_aws.ps1) so that all environments
+  # share the same fme_flow_key.jceks, enabling cross-environment project promotion.
+  resource "aws_iam_role_policy" "fme_flow_ssm_params" {
+    name = "FMEFlowSSMParameters"
+    role = aws_iam_role.fme_flow.name
+
+    policy = jsonencode({
+      Version = "2012-10-17"
+      Statement = [{
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "arn:aws:ssm:*:*:parameter/fmeflow/*"
+      }]
+    })
+  }
+
   # This policy give the ec2 instances access to the scecrets for the RDS database and the FSx fileshare which is access via the AD admin account.
   resource "aws_iam_role_policy" "fme_flow_ec2_access" {
     name = "AmazonEC2RoleforSecretManager"

@@ -113,6 +113,29 @@ foreach ($rule in $fwRules) {
     Log "Firewall: opened port $($rule.Port) ($($rule.Name))"
 }
 
+# ── Write shared encryption key from SSM ──────────────────────────────────────
+# FME Flow encrypts named connection passwords with fme_flow_key.jceks.
+# Each fresh install generates a unique key, so cross-environment project
+# promotion fails if the keys differ ("cannot find key to decrypt" error).
+# We write the shared key from SSM before services start so FME Flow picks
+# it up on first launch. All environments that need to import DEV projects
+# must have the same key — it is stored at /fmeflow/shared/encryption-key.
+$keyParam = "/fmeflow/shared/encryption-key"
+try {
+    $region   = (Invoke-RestMethod -Uri "http://169.254.169.254/latest/meta-data/placement/region" -UseBasicParsing).Trim()
+    $keyB64   = (Get-SSMParameter -Name $keyParam -WithDecryption $true -Region $region).Value.Trim()
+    $keyBytes = [System.Convert]::FromBase64String($keyB64)
+    $keyDir   = "C:\ProgramData\Safe Software\FMEFlow\key"
+    if (-not (Test-Path $keyDir)) { New-Item -ItemType Directory -Path $keyDir -Force | Out-Null }
+    $keyFile  = Join-Path $keyDir "fme_flow_key.jceks"
+    [System.IO.File]::WriteAllBytes($keyFile, $keyBytes)
+    Log "Encryption key written from SSM ($keyParam) — $($keyBytes.Length) bytes"
+} catch {
+    Log "WARNING: Could not write encryption key from SSM ($keyParam): $_"
+    Log "FME Flow will generate its own key. Cross-environment project promotion"
+    Log "will fail if named connections have stored passwords — re-enter them manually after import."
+}
+
 # ── Enable and start FME Flow services ────────────────────────────────────────
 Log "Enabling and starting FME Flow services..."
 $serviceOrder = @("FME Flow Database", "FME Flow Core", "FMEFlowAppServer", "FME Flow Engines")

@@ -1,5 +1,5 @@
 // =============================================================================
-// Build 3: FME Flow Project Sync
+// FME Flow Project Sync Pipeline
 // =============================================================================
 // Promotes an FME Flow Project from one environment to another.
 //
@@ -10,11 +10,10 @@
 //   FME work items between environments in a controlled, repeatable way.
 //
 // What this pipeline does:
-//   1. Connects to the source FME Flow environment via the FME Flow REST API
-//   2. Downloads the named project as an .fsproject file
-//   3. Connects to the target FME Flow environment
-//   4. Uploads the .fsproject to the target environment
-//   5. Verifies the project appears in the target before finishing
+//   1. Validates parameters and checks connectivity + auth (pre-flight)
+//   2. Downloads the named project from the source FME Flow environment
+//   3. Uploads the .fsproject to the target FME Flow environment
+//   4. Verifies the project is visible in the target before finishing
 //
 // Required Jenkins credentials (one per environment):
 //   dami-fmeflow-dev-token         - FME Flow API token for dev
@@ -24,7 +23,19 @@
 //
 // How to generate an API token:
 //   FME Flow UI → username (top right) → User Settings → Manage Tokens → Generate
-//   The token must be generated while logged in as the user who OWNS the project.
+//   IMPORTANT: When generating the token, do NOT enable custom permissions.
+//   Leave the permissions as "inherit from user" (the default). Tokens with
+//   custom permissions that exclude repositories will get 403 on project upload.
+//
+// Encryption key requirement:
+//   FME Flow encrypts named connection passwords with a per-instance JCEKS key
+//   stored in C:\ProgramData\Safe Software\FMEFlow\key\fme_flow_key.jceks.
+//   For project promotion to work across environments, source and target must
+//   share the same fme_flow_key.jceks. This is an infrastructure concern — sync
+//   the key as part of provisioning (e.g. store in SSM Parameter Store and write
+//   it on instance startup before FME Flow services start).
+//   Do NOT copy fme_flow_transmission.jceks between environments — that key
+//   is used for internal component communication and is instance-specific.
 // =============================================================================
 
 pipeline {
@@ -49,18 +60,18 @@ pipeline {
         string(
             name: 'PROJECT_ID',
             defaultValue: '',
-            description: 'Optional: FME Flow project UUID from the project page URL (e.g. 6e7efb15-083d-4302-a204-6bcedf22b070). Used as fallback if name-based export fails.'
+            description: 'Optional: FME Flow project UUID from the project page URL. Used as fallback if name-based export fails.'
         )
         booleanParam(
             name: 'OVERWRITE',
             defaultValue: true,
-            description: 'Overwrite the project if it already exists in the target environment. Uncheck to fail if the project already exists.'
+            description: 'Overwrite the project if it already exists in the target environment.'
         )
     }
 
     environment {
         FME_CLI     = 'fmeflow'
-        EXPORT_FILE = "cicd-deploy-${params.PROJECT_NAME ?: 'project'}.fsproject"
+        EXPORT_FILE = "${params.SOURCE_ENV}-${params.PROJECT_NAME ?: 'project'}.fsproject"
 
         // FME Flow base URLs per environment — update these after each Terraform deployment
         DEV_URL         = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
@@ -72,34 +83,87 @@ pipeline {
     stages {
 
         stage('Validate Parameters') {
-            // Checks that the required parameters are provided and make sense
-            // before doing anything. Promotes to prod triggers a manual approval
-            // gate so accidental promotions cannot happen.
             steps {
                 script {
                     if (!params.PROJECT_NAME?.trim()) {
                         error 'PROJECT_NAME is required. Enter the exact name of the FME Flow project to promote.'
                     }
                     if (params.SOURCE_ENV == params.TARGET_ENV) {
-                        error "SOURCE_ENV and TARGET_ENV cannot be the same environment (both set to '${params.SOURCE_ENV}')."
+                        error "SOURCE_ENV and TARGET_ENV cannot be the same (both set to '${params.SOURCE_ENV}')."
                     }
                     if (params.TARGET_ENV == 'prod') {
                         input message: "You are promoting '${params.PROJECT_NAME}' to PRODUCTION from ${params.SOURCE_ENV}. Review the project in ${params.SOURCE_ENV} before continuing.",
                               ok: 'Confirm promotion to prod'
                     }
-                    echo "Promoting: '${params.PROJECT_NAME}' from ${params.SOURCE_ENV} to ${params.TARGET_ENV}"
-                    if (params.PROJECT_ID?.trim()) {
-                        echo "Project ID provided: ${params.PROJECT_ID} (will be used as fallback if name-based export fails)"
+                    echo "Promoting '${params.PROJECT_NAME}' from ${params.SOURCE_ENV} → ${params.TARGET_ENV}"
+                }
+            }
+        }
+
+        stage('Pre-flight Checks') {
+            // Verifies connectivity and auth before doing anything.
+            // Catches the two most common failure modes early:
+            //   1. Environment unreachable (ALB down, instance not healthy)
+            //   2. Token invalid / expired / has custom permissions (403 or 401)
+            // Both of these used to surface as cryptic failures mid-pipeline.
+            steps {
+                script {
+                    def sourceUrl = getEnvUrl(params.SOURCE_ENV)
+                    def targetUrl = getEnvUrl(params.TARGET_ENV)
+
+                    // --- Connectivity ---
+                    echo "Checking source connectivity: ${sourceUrl}"
+                    def sourceOk = sh(
+                        script: "curl -sf --max-time 15 '${sourceUrl}/fmeapiv4/healthcheck/liveness' > /dev/null && echo OK || echo FAIL",
+                        returnStdout: true
+                    ).trim()
+                    if (sourceOk != 'OK') {
+                        error """\
+Source environment (${params.SOURCE_ENV}) is not reachable.
+URL: ${sourceUrl}/fmeapiv4/healthcheck/liveness
+Check that the FME Flow instance is running and the ALB is healthy."""
                     }
+
+                    echo "Checking target connectivity: ${targetUrl}"
+                    def targetOk = sh(
+                        script: "curl -sf --max-time 15 '${targetUrl}/fmeapiv4/healthcheck/liveness' > /dev/null && echo OK || echo FAIL",
+                        returnStdout: true
+                    ).trim()
+                    if (targetOk != 'OK') {
+                        error """\
+Target environment (${params.TARGET_ENV}) is not reachable.
+URL: ${targetUrl}/fmeapiv4/healthcheck/liveness
+Check that the FME Flow instance is running and the ALB is healthy."""
+                    }
+
+                    // --- Token validation ---
+                    // Calls GET /fmeapiv4/projects with the token. This uses the same
+                    // permission scope as project upload, so it will catch custompermissions
+                    // issues (403) and expired/invalid tokens (401) before we run anything.
+                    echo "Validating source token (dami-fmeflow-${params.SOURCE_ENV}-token)..."
+                    withCredentials([string(credentialsId: "dami-fmeflow-${params.SOURCE_ENV}-token", variable: 'FME_TOKEN')]) {
+                        def code = sh(
+                            script: "curl -sf --max-time 15 -H 'Authorization: fmetoken token=\$FME_TOKEN' '${sourceUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
+                            returnStdout: true
+                        ).trim()
+                        checkTokenResponse(code, params.SOURCE_ENV, 'source')
+                    }
+
+                    echo "Validating target token (dami-fmeflow-${params.TARGET_ENV}-token)..."
+                    withCredentials([string(credentialsId: "dami-fmeflow-${params.TARGET_ENV}-token", variable: 'FME_TOKEN')]) {
+                        def code = sh(
+                            script: "curl -sf --max-time 15 -H 'Authorization: fmetoken token=\$FME_TOKEN' '${targetUrl}/fmeapiv4/projects?limit=1' -o /dev/null -w '%{http_code}'",
+                            returnStdout: true
+                        ).trim()
+                        checkTokenResponse(code, params.TARGET_ENV, 'target')
+                    }
+
+                    echo "Pre-flight checks passed."
                 }
             }
         }
 
         stage('Setup FME Flow CLI') {
-            // Installs the FME Flow CLI (fmeflow-cli) on the Jenkins agent if
-            // not already present. The CLI wraps the FME Flow REST API into
-            // simple shell commands so we do not have to write raw curl calls.
-            // Installation is via pip and takes ~30 seconds on first run.
             steps {
                 script {
                     def installed = sh(
@@ -119,25 +183,19 @@ pipeline {
         }
 
         stage('Export Project from Source') {
-            // Authenticates with the source FME Flow environment and downloads
-            // the project as an .fsproject file. The .fsproject bundles all
-            // project contents: workspaces, automations, schedules, and
-            // connection definitions (passwords are excluded for security).
-            //
-            // Download strategy:
-            //   1. Try by PROJECT_NAME (standard path)
-            //   2. If name fails and PROJECT_ID is provided, fall back to ID
-            //   3. If both fail, print diagnostics and error out clearly
+            // Downloads the project as an .fsproject file.
+            // Strategy:
+            //   1. Try by PROJECT_NAME
+            //   2. If that fails and PROJECT_ID is provided, fall back to ID
+            //   3. Otherwise fail with a self-diagnosing error message
             steps {
                 script {
                     def sourceUrl = getEnvUrl(params.SOURCE_ENV)
                     def credId    = "dami-fmeflow-${params.SOURCE_ENV}-token"
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
-                        echo "Connecting to source: ${params.SOURCE_ENV} (${sourceUrl})"
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
-                        // Attempt 1: download by name
                         def byName = sh(
                             script: "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}' 2>&1 && echo __SUCCESS__ || echo __FAILED__",
                             returnStdout: true
@@ -145,19 +203,17 @@ pipeline {
                         echo byName
 
                         if (!byName.contains('__SUCCESS__')) {
-                            // Attempt 2: download by ID if provided
                             if (params.PROJECT_ID?.trim()) {
-                                echo "Name-based download failed. Trying by project ID '${params.PROJECT_ID}'..."
+                                echo "Name-based download failed. Trying project ID '${params.PROJECT_ID}'..."
                                 sh "${env.FME_CLI} projects download --id '${params.PROJECT_ID}' -f '${env.EXPORT_FILE}'"
                             } else {
-                                error """Export failed: project '${params.PROJECT_NAME}' not found by name and no PROJECT_ID was provided.
+                                error """\
+Export failed: project '${params.PROJECT_NAME}' not found in ${params.SOURCE_ENV}.
 Possible causes:
-  1. The token in Jenkins (dami-fmeflow-${params.SOURCE_ENV}-token) was generated with custom permissions that exclude repositories.
-     Fix: in FME Flow UI → User Settings → Manage Tokens, delete the token and regenerate it with inherited (not custom) permissions.
-  2. The project name has different casing or spacing.
-     Fix: copy the exact project name from FME Flow UI → Projects.
-  3. The token has expired.
-     Fix: generate a new token and update the Jenkins credential.
+  1. The project name has different casing or spacing.
+     Fix: copy the exact name from FME Flow UI → Projects.
+  2. The project does not exist in ${params.SOURCE_ENV} yet.
+     Fix: publish the project to ${params.SOURCE_ENV} first.
 To bypass: paste the project UUID from the FME Flow project page URL into the PROJECT_ID parameter."""
                             }
                         }
@@ -170,13 +226,18 @@ To bypass: paste the project UUID from the FME Flow project page URL into the PR
         }
 
         stage('Import Project to Target') {
-            // Authenticates with the target FME Flow environment and uploads
-            // the .fsproject file. If OVERWRITE is checked, any existing project
-            // with the same name in the target will be replaced.
+            // Uploads the .fsproject to the target environment.
+            // --quick submits the import task and returns immediately; the verify
+            // stage below polls for completion so we avoid the session timeout
+            // that causes 401 during long imports.
             //
-            // Note: Connection passwords are not included in .fsproject files.
-            // After the first import into a new environment, re-enter passwords
-            // in FME Flow UI → Connections.
+            // Named connection passwords are NOT included in .fsproject files.
+            // After the first import into a new environment you need to re-enter
+            // connection passwords via FME Flow UI → Connections.
+            //
+            // If the import task fails with "encrypted data that cannot be decrypted",
+            // that means source and target have different fme_flow_key.jceks files.
+            // See the header comment for how to fix this at the infrastructure level.
             steps {
                 script {
                     def targetUrl = getEnvUrl(params.TARGET_ENV)
@@ -184,21 +245,32 @@ To bypass: paste the project UUID from the FME Flow project page URL into the PR
                     def overwrite = params.OVERWRITE ? '--overwrite' : ''
 
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
-                        echo "Connecting to target: ${params.TARGET_ENV} (${targetUrl})"
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
 
-                        echo "Importing project '${params.PROJECT_NAME}' into ${params.TARGET_ENV}..."
-                        sh "${env.FME_CLI} projects upload -f '${env.EXPORT_FILE}' ${overwrite} --quick"
-                        echo "Import complete."
+                        echo "Uploading '${env.EXPORT_FILE}' to ${params.TARGET_ENV}..."
+                        def uploadOut = sh(
+                            script: "${env.FME_CLI} projects upload -f '${env.EXPORT_FILE}' ${overwrite} --quick 2>&1",
+                            returnStdout: true
+                        ).trim()
+                        echo uploadOut
+
+                        // Extract task ID so the verify stage can poll it
+                        def taskIdMatch = (uploadOut =~ /task submitted with id:\s*(\d+)/)
+                        if (taskIdMatch) {
+                            env.IMPORT_TASK_ID = taskIdMatch[0][1]
+                            echo "Import task ID: ${env.IMPORT_TASK_ID}"
+                        } else {
+                            echo "Could not extract task ID from upload output — verify stage will check by project name only."
+                        }
                     }
                 }
             }
         }
 
         stage('Verify Promotion') {
-            // Confirms the project is visible in the target environment after
-            // import. Uses the CLI name filter to look up the project directly
-            // rather than grepping a table, which is more reliable.
+            // Confirms the project is visible in the target after import.
+            // If --quick was used, the import may still be in progress; this
+            // stage retries for up to 90 seconds to handle that.
             steps {
                 script {
                     def targetUrl = getEnvUrl(params.TARGET_ENV)
@@ -207,26 +279,36 @@ To bypass: paste the project UUID from the FME Flow project page URL into the PR
                     withCredentials([string(credentialsId: credId, variable: 'FME_TOKEN')]) {
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
 
-                        // Use --name flag to look up the project directly
-                        def result = sh(
-                            script: "${env.FME_CLI} projects --name '${params.PROJECT_NAME}' --json 2>&1 || echo NOT_FOUND",
-                            returnStdout: true
-                        ).trim()
-                        echo "Verify result: ${result}"
-
-                        // Also try by ID if provided
-                        if (params.PROJECT_ID?.trim()) {
-                            def byId = sh(
-                                script: "${env.FME_CLI} projects --id '${params.PROJECT_ID}' --json 2>&1 || echo NOT_FOUND",
+                        // Poll for up to 90 seconds (9 × 10 s) to allow the import task to settle
+                        def verified = false
+                        for (int attempt = 1; attempt <= 9; attempt++) {
+                            def result = sh(
+                                script: "${env.FME_CLI} projects --name '${params.PROJECT_NAME}' --json 2>&1 || echo NOT_FOUND",
                                 returnStdout: true
                             ).trim()
-                            echo "Verify by ID: ${byId}"
+
+                            if (!result.contains('NOT_FOUND') &&
+                                !result.contains('"items":[]') &&
+                                !result.contains('"totalCount":0')) {
+                                verified = true
+                                echo "Verified: '${params.PROJECT_NAME}' is present in ${params.TARGET_ENV}."
+                                break
+                            }
+                            echo "Attempt ${attempt}/9 — project not yet visible. Waiting 10 seconds..."
+                            sleep 10
                         }
 
-                        if (result.contains('NOT_FOUND') || result.contains('"items":[]') || result.contains('"totalCount":0')) {
-                            error "Verification failed: '${params.PROJECT_NAME}' not found in ${params.TARGET_ENV} after import."
+                        if (!verified) {
+                            error """\
+Verification failed: '${params.PROJECT_NAME}' is not visible in ${params.TARGET_ENV} after 90 seconds.
+Possible causes:
+  1. The import task failed with an encryption error.
+     Check: FME Flow UI → Workspace Manager → Import/Export history, or the task log at
+     C:\\ProgramData\\Safe Software\\FMEFlow\\resources\\logs\\core\\current\\tasks\\task_<id>.log
+     Fix: sync fme_flow_key.jceks from ${params.SOURCE_ENV} to ${params.TARGET_ENV} (see header comment).
+  2. The import task is still running (unlikely after 90 s — check the task log).
+  3. The project name in the source environment is different from what was uploaded."""
                         }
-                        echo "Verified: '${params.PROJECT_NAME}' is present in ${params.TARGET_ENV}."
                     }
                 }
             }
@@ -235,15 +317,13 @@ To bypass: paste the project UUID from the FME Flow project page URL into the PR
 
     post {
         always {
-            // Remove the .fsproject file from the Jenkins workspace after the
-            // build. It contains workspace source and should not be left on disk.
             sh "rm -f '${env.EXPORT_FILE}'"
         }
         success {
-            echo "Build 3 complete: '${params.PROJECT_NAME}' promoted from ${params.SOURCE_ENV} to ${params.TARGET_ENV}."
+            echo "Promotion complete: '${params.PROJECT_NAME}' is now in ${params.TARGET_ENV}."
         }
         failure {
-            echo "Build 3 FAILED: promotion of '${params.PROJECT_NAME}' did not complete. Check the stage logs above."
+            echo "Promotion FAILED. See stage logs above for the specific cause and fix."
         }
     }
 }
@@ -255,6 +335,26 @@ def getEnvUrl(String envName) {
         case 'staging':     return env.STAGING_URL
         case 'prod':        return env.PROD_URL
         case 'cicd-deploy': return env.CICD_DEPLOY_URL
-        default:            error "Unknown environment: '${envName}'. Add it to the getEnvUrl function."
+        default:            error "Unknown environment: '${envName}'. Add it to getEnvUrl."
+    }
+}
+
+// Validates an HTTP response code from a token auth check and fails with a
+// self-diagnosing error message rather than letting the failure surface later.
+def checkTokenResponse(String code, String envName, String role) {
+    if (code == '401') {
+        error """\
+The ${role} token (dami-fmeflow-${envName}-token) is invalid or expired.
+Fix: in FME Flow UI → User Settings → Manage Tokens, delete the token and generate a new one.
+     Then update the Jenkins credential with the new token value."""
+    }
+    if (code == '403') {
+        error """\
+The ${role} token (dami-fmeflow-${envName}-token) has custom permissions that block project access.
+Fix: in FME Flow UI → User Settings → Manage Tokens, delete the token and regenerate it.
+     When generating, leave permissions as "inherit from user" — do NOT enable custom permissions."""
+    }
+    if (code != '200') {
+        error "Token check for ${role} environment (${envName}) returned unexpected HTTP ${code}. Check FME Flow Application Server logs."
     }
 }
