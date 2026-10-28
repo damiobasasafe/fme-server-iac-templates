@@ -1,0 +1,54 @@
+// =============================================================================
+// FME Flow AMI Inventory
+// =============================================================================
+// Lists all FME Flow AMIs owned by this account in a chosen region.
+// Shows name, ID, creation date, and state.
+// Read only — no changes made.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'AWS_REGION',
+            choices: ['us-east-1', 'ca-west-1', 'us-west-2', 'eu-west-1', 'ca-central-1'],
+            description: 'Region to list AMIs in.'
+        )
+    }
+
+    stages {
+
+        stage('AMI Inventory') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo " FME Flow AMIs in ${params.AWS_REGION}"
+                    echo "=========================================="
+                }
+                sh """
+                    aws ec2 describe-images \
+                        --region ${params.AWS_REGION} \
+                        --owners self \
+                        --filters "Name=name,Values=*fme*" \
+                        --query "sort_by(Images, &CreationDate)[*].{Name:Name, ID:ImageId, Created:CreationDate, State:State}" \
+                        --output table
+                """
+            }
+        }
+
+        stage('Summary') {
+            steps {
+                sh """
+                    COUNT=\$(aws ec2 describe-images \
+                        --region ${params.AWS_REGION} \
+                        --owners self \
+                        --filters "Name=name,Values=*fme*" \
+                        --query "length(Images)" \
+                        --output text)
+                    echo "Total FME Flow AMIs in ${params.AWS_REGION}: \$COUNT"
+                """
+            }
+        }
+    }
+}

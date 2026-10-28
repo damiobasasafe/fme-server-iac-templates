@@ -1,0 +1,71 @@
+// =============================================================================
+// FME Flow Job Queue Report
+// =============================================================================
+// Shows running and queued jobs on a chosen FME Flow environment.
+// Read only — no jobs are triggered or cancelled.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging'],
+            description: 'Environment to check the job queue on.'
+        )
+    }
+
+    environment {
+        DEV_URL     = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
+        STAGING_URL = 'http://dami-fmeflow-staging-alb-2096266007.us-east-1.elb.amazonaws.com'
+    }
+
+    stages {
+
+        stage('Job Queue') {
+            steps {
+                script {
+                    def url = params.ENVIRONMENT == 'dev' ? env.DEV_URL : env.STAGING_URL
+
+                    withCredentials([string(credentialsId: "dami-fmeflow-${params.ENVIRONMENT}-token", variable: 'TOKEN')]) {
+                        def response = sh(
+                            script: "curl -s --max-time 15 -H \"Authorization: fmetoken token=\$TOKEN\" \"${url}/fmeapiv4/transformations?limit=100\"",
+                            returnStdout: true
+                        ).trim()
+
+                        def data     = new groovy.json.JsonSlurper().parseText(response)
+                        def jobs     = data.items ?: []
+                        def running  = jobs.findAll { it.status == 'RUNNING' }
+                        def queued   = jobs.findAll { it.status == 'QUEUED' }
+                        def failed   = jobs.findAll { it.status == 'FAILED' }
+
+                        echo "=========================================="
+                        echo " ${params.ENVIRONMENT.toUpperCase()} Job Queue"
+                        echo "=========================================="
+                        echo " Running : ${running.size()}"
+                        echo " Queued  : ${queued.size()}"
+                        echo " Failed  : ${failed.size()}"
+                        echo "=========================================="
+
+                        if (running) {
+                            echo "RUNNING JOBS:"
+                            running.each { j -> echo "  [${j.id}] ${j.workspacePath ?: j.request?.workspacePath ?: 'unknown'}" }
+                        }
+                        if (queued) {
+                            echo "QUEUED JOBS:"
+                            queued.each { j -> echo "  [${j.id}] ${j.workspacePath ?: j.request?.workspacePath ?: 'unknown'}" }
+                        }
+                        if (failed) {
+                            echo "RECENTLY FAILED:"
+                            failed.each { j -> echo "  [${j.id}] ${j.workspacePath ?: j.request?.workspacePath ?: 'unknown'}" }
+                        }
+                        if (!running && !queued && !failed) {
+                            echo "No active jobs."
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

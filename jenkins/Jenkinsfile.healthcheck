@@ -1,0 +1,56 @@
+// =============================================================================
+// FME Flow Health Check
+// =============================================================================
+// Pings all FME Flow environments and reports their status.
+// Safe to run at any time — read only, no changes made.
+// Can be scheduled via a Jenkins cron trigger.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        booleanParam(
+            name: 'INCLUDE_PROD',
+            defaultValue: false,
+            description: 'Include the PROD environment in the health check.'
+        )
+    }
+
+    stages {
+
+        stage('Health Check') {
+            steps {
+                script {
+                    def environments = [
+                        DEV    : 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com',
+                        STAGING: 'http://dami-fmeflow-staging-alb-2096266007.us-east-1.elb.amazonaws.com'
+                    ]
+
+                    echo "=========================================="
+                    echo " FME Flow Environment Health Check"
+                    echo "=========================================="
+
+                    environments.each { name, url ->
+                        def code = sh(
+                            script: "curl -s --max-time 15 -o /dev/null -w '%{http_code}' ${url}/fmeapiv4/info",
+                            returnStdout: true
+                        ).trim()
+                        def status = (code == '200' || code == '401') ? 'UP' : "DOWN (HTTP ${code})"
+                        echo "${name}: ${status}  (${url})"
+                    }
+
+                    echo "=========================================="
+                    echo " Check complete"
+                    echo "=========================================="
+                }
+            }
+        }
+    }
+
+    post {
+        failure {
+            echo 'Health check failed. One or more environments may be unreachable.'
+        }
+    }
+}

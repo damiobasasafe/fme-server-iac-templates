@@ -1,0 +1,71 @@
+// =============================================================================
+// FME Flow Project Report
+// =============================================================================
+// Lists all projects across DEV and STAGING side by side.
+// Useful for spotting which projects exist in one environment but not the other.
+// Read only — no changes made to any environment.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['both', 'dev', 'staging'],
+            description: 'Which environment to report on.'
+        )
+    }
+
+    environment {
+        DEV_URL     = 'http://dami-fmeflow-dev-alb-210390386.us-east-1.elb.amazonaws.com'
+        STAGING_URL = 'http://dami-fmeflow-staging-alb-2096266007.us-east-1.elb.amazonaws.com'
+    }
+
+    stages {
+
+        stage('DEV Projects') {
+            when {
+                expression { params.ENVIRONMENT == 'dev' || params.ENVIRONMENT == 'both' }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'dami-fmeflow-dev-token', variable: 'TOKEN')]) {
+                    script {
+                        def response = sh(
+                            script: "curl -s --max-time 15 -H \"Authorization: fmetoken token=\$TOKEN\" \"${env.DEV_URL}/fmeapiv4/projects?limit=100\"",
+                            returnStdout: true
+                        ).trim()
+                        def data = new groovy.json.JsonSlurper().parseText(response)
+                        def projects = data.items ?: []
+                        echo "=========================================="
+                        echo " DEV — ${projects.size()} project(s)"
+                        echo "=========================================="
+                        projects.each { p -> echo "  ${p.name}" }
+                    }
+                }
+            }
+        }
+
+        stage('STAGING Projects') {
+            when {
+                expression { params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'both' }
+            }
+            steps {
+                withCredentials([string(credentialsId: 'dami-fmeflow-staging-token', variable: 'TOKEN')]) {
+                    script {
+                        def response = sh(
+                            script: "curl -s --max-time 15 -H \"Authorization: fmetoken token=\$TOKEN\" \"${env.STAGING_URL}/fmeapiv4/projects?limit=100\"",
+                            returnStdout: true
+                        ).trim()
+                        def data = new groovy.json.JsonSlurper().parseText(response)
+                        def projects = data.items ?: []
+                        echo "=========================================="
+                        echo " STAGING — ${projects.size()} project(s)"
+                        echo "=========================================="
+                        projects.each { p -> echo "  ${p.name}" }
+                    }
+                }
+            }
+        }
+    }
+}

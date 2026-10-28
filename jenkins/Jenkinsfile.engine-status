@@ -1,0 +1,57 @@
+// =============================================================================
+// FME Flow Engine Status
+// =============================================================================
+// Shows the current state of the FME Flow Engine Auto Scaling Groups
+// for a chosen environment: how many engines are running, desired, min, and max.
+// Read only — no scaling changes are made.
+// =============================================================================
+
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Environment to check engine status for.'
+        )
+        choice(
+            name: 'AWS_REGION',
+            choices: ['us-east-1', 'ca-west-1', 'us-west-2', 'eu-west-1', 'ca-central-1'],
+            description: 'Region the environment is deployed in.'
+        )
+    }
+
+    stages {
+
+        stage('Engine ASG Status') {
+            steps {
+                sh """
+                    echo "=========================================="
+                    echo " ${params.ENVIRONMENT.toUpperCase()} Engine Status (${params.AWS_REGION})"
+                    echo "=========================================="
+                    aws autoscaling describe-auto-scaling-groups \
+                        --region ${params.AWS_REGION} \
+                        --filters "Name=tag:owner,Values=dami-${params.ENVIRONMENT}" \
+                        --query "AutoScalingGroups[*].{ASG:AutoScalingGroupName, Desired:DesiredCapacity, Min:MinSize, Max:MaxSize, InService:length(Instances[?LifecycleState=='InService'])}" \
+                        --output table
+                """
+            }
+        }
+
+        stage('Instance Detail') {
+            steps {
+                sh """
+                    echo "=========================================="
+                    echo " ${params.ENVIRONMENT.toUpperCase()} Instance Health"
+                    echo "=========================================="
+                    aws ec2 describe-instances \
+                        --region ${params.AWS_REGION} \
+                        --filters "Name=tag:owner,Values=dami-${params.ENVIRONMENT}" "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+                        --query "Reservations[*].Instances[*].{ID:InstanceId, Type:InstanceType, State:State.Name, LaunchTime:LaunchTime}" \
+                        --output table
+                """
+            }
+        }
+    }
+}
