@@ -207,7 +207,7 @@ To bypass: paste the project UUID from the FME Flow project page URL into the PR
                         sh "${env.FME_CLI} login ${targetUrl} --token \$FME_TOKEN"
 
                         echo "Importing project '${params.PROJECT_NAME}' into ${params.TARGET_ENV}..."
-                        sh "${env.FME_CLI} projects upload -f '${env.EXPORT_FILE}' ${overwrite}"
+                        sh "${env.FME_CLI} projects upload -f '${env.EXPORT_FILE}' ${overwrite} --quick"
                         echo "Import complete."
                     }
                 }
