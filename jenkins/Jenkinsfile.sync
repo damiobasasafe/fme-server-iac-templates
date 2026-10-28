@@ -124,9 +124,9 @@ pipeline {
                         sh "${env.FME_CLI} login ${sourceUrl} --token \$FME_TOKEN"
 
                         echo "Token user check:"
-                        sh "curl -s -H 'Authorization: fmetoken token=\$FME_TOKEN' '${sourceUrl}/fmeapiv4/users/current' || true"
+                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/users/current" || true"""
                         echo "Available projects in ${params.SOURCE_ENV}:"
-                        sh "curl -s -H 'Authorization: fmetoken token=\$FME_TOKEN' '${sourceUrl}/fmeapiv4/projects' || true"
+                        sh """curl -s -H "Authorization: fmetoken token=\$FME_TOKEN" "${sourceUrl}/fmeapiv4/projects" || true"""
 
                         echo "Exporting project: '${params.PROJECT_NAME}'"
                         sh "${env.FME_CLI} projects download --name '${params.PROJECT_NAME}' -f '${env.EXPORT_FILE}'"
