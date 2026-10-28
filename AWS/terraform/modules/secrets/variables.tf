@@ -1,3 +1,8 @@
+variable "owner" {
+  type        = string
+  description = "Environment owner prefix used to namespace Secrets Manager secret names (e.g. dami-cicd-dev)."
+}
+
 variable "fsx_dns_name" {
   type        = string
   description = "Security group id for FME Flow deployment"

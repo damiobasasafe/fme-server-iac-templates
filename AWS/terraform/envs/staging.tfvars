@@ -9,11 +9,11 @@ sn_name          = "dami-fmeflow-staging-subnet"
 igw_name         = "dami-fmeflow-staging-igw"
 eip_name         = "dami-fmeflow-staging-eip"
 nat_name         = "dami-fmeflow-staging-nat"
-vpc_cidr         = "10.2.0.0/16"
-public_sn1_cidr  = "10.2.0.0/20"
-public_sn2_cidr  = "10.2.16.0/20"
-private_sn1_cidr = "10.2.128.0/20"
-private_sn2_cidr = "10.2.144.0/20"
+vpc_cidr         = "10.3.0.0/16"
+public_sn1_cidr  = "10.3.0.0/20"
+public_sn2_cidr  = "10.3.16.0/20"
+private_sn1_cidr = "10.3.128.0/20"
+private_sn2_cidr = "10.3.144.0/20"
 
 # Load balancers
 alb_name = "dami-fmeflow-staging-alb"
@@ -23,8 +23,8 @@ nlb_name = "dami-fmeflow-staging-nlb"
 ad_name = "staging-fmeflow.safe"
 
 # AMI IDs - populated by Packer pipeline
-fme_core_image_id   = ""
-fme_engine_image_id = ""
+fme_core_image_id   = "ami-0d6e973bf8df479f4"
+fme_engine_image_id = "ami-05b6e33e6cdc40473"
 
 # Secrets - injected by Jenkins from AWS Secrets Manager, do not hardcode
 # ad_admin_pw   = injected at runtime

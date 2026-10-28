@@ -11,7 +11,7 @@ locals {
 }
 
 resource "aws_secretsmanager_secret" "fme_flow_rds" {
-  name                    = "fmeflowRDSSecret"
+  name                    = "${var.owner}-fmeflowRDSSecret"
   recovery_window_in_days = 0
 }
 
@@ -21,7 +21,7 @@ resource "aws_secretsmanager_secret_version" "fme_flow_rds" {
 }
 
 resource "aws_secretsmanager_secret" "fme_flow_fsx" {
-  name                    = "fmeflowFSXSecret"
+  name                    = "${var.owner}-fmeflowFSXSecret"
   recovery_window_in_days = 0
 }
 

@@ -75,6 +75,7 @@ module "iam" {
 
 module "secrets" {
   source        = "./modules/secrets/"
+  owner         = var.owner
   fsx_dns_name  = module.storage.fsx_dns_name
   db_dns_name   = module.database.db_dns_name
   ad_admin_pw   = var.ad_admin_pw
